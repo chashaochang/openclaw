@@ -1,0 +1,544 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "OpenClaw Node for HarmonyOS"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "OpenClaw Node"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "OpenClaw"
+    },
+    {
+      "name": "permission_internet_reason",
+      "value": "Connect to OpenClaw gateway"
+    },
+    {
+      "name": "permission_camera_reason",
+      "value": "Scan gateway pairing QR code"
+    },
+    {
+      "name": "connect_scan_qr",
+      "value": "Scan QR Code"
+    },
+    {
+      "name": "connect_setup_code",
+      "value": "Setup code"
+    },
+    {
+      "name": "connect_setup_code_placeholder",
+      "value": "Paste setup code"
+    },
+    {
+      "name": "connect_validation_setup_code",
+      "value": "Paste a valid setup code to connect."
+    },
+    {
+      "name": "connect_manual",
+      "value": "Manual"
+    },
+    {
+      "name": "connect_qr_error_invalid",
+      "value": "Invalid setup code"
+    },
+    {
+      "name": "product_name_openclaw",
+      "value": "OpenClaw"
+    },
+    {
+      "name": "tab_connect",
+      "value": "Connect"
+    },
+    {
+      "name": "tab_chat",
+      "value": "Chat"
+    },
+    {
+      "name": "tab_settings",
+      "value": "Settings"
+    },
+    {
+      "name": "status_connected",
+      "value": "Connected"
+    },
+    {
+      "name": "status_offline",
+      "value": "Offline"
+    },
+    {
+      "name": "status_connecting",
+      "value": "Connecting…"
+    },
+    {
+      "name": "connect_primary_connect",
+      "value": "Connect Gateway"
+    },
+    {
+      "name": "connect_primary_disconnect",
+      "value": "Disconnect Gateway"
+    },
+    {
+      "name": "connect_host_label",
+      "value": "Host"
+    },
+    {
+      "name": "connect_port_label",
+      "value": "Port"
+    },
+    {
+      "name": "connect_use_tls",
+      "value": "Use TLS"
+    },
+    {
+      "name": "connect_use_tls_subtitle",
+      "value": "Switch to secure websocket (wss)."
+    },
+    {
+      "name": "connect_token_optional",
+      "value": "Token (optional)"
+    },
+    {
+      "name": "connect_password_optional",
+      "value": "Password (optional)"
+    },
+    {
+      "name": "connect_run_onboarding_again",
+      "value": "Run onboarding again"
+    },
+    {
+      "name": "common_cancel",
+      "value": "Cancel"
+    },
+    {
+      "name": "common_back",
+      "value": "Back"
+    },
+    {
+      "name": "common_next",
+      "value": "Next"
+    },
+    {
+      "name": "common_finish",
+      "value": "Finish"
+    },
+    {
+      "name": "common_connect",
+      "value": "Connect"
+    },
+    {
+      "name": "connect_heading_kicker",
+      "value": "Connection Control"
+    },
+    {
+      "name": "connect_heading_title",
+      "value": "Gateway Connection"
+    },
+    {
+      "name": "connect_heading_subtitle",
+      "value": "One primary action. Open advanced controls only when needed."
+    },
+    {
+      "name": "connect_active_endpoint",
+      "value": "Active endpoint"
+    },
+    {
+      "name": "connect_gateway_state",
+      "value": "Gateway state"
+    },
+    {
+      "name": "connect_not_set",
+      "value": "Not set"
+    },
+    {
+      "name": "connect_advanced_controls_title",
+      "value": "Advanced controls"
+    },
+    {
+      "name": "connect_advanced_controls_subtitle",
+      "value": "Setup code, endpoint, TLS, token, password, onboarding."
+    },
+    {
+      "name": "connect_expand_advanced_controls",
+      "value": "Expand advanced controls"
+    },
+    {
+      "name": "connect_collapse_advanced_controls",
+      "value": "Collapse advanced controls"
+    },
+    {
+      "name": "connect_connection_method",
+      "value": "Connection method"
+    },
+    {
+      "name": "connect_method_setup_code",
+      "value": "Setup Code"
+    },
+    {
+      "name": "connect_method_manual",
+      "value": "Manual"
+    },
+    {
+      "name": "connect_run_on_gateway_host",
+      "value": "Run these on the gateway host:"
+    },
+    {
+      "name": "connect_setup_code_label",
+      "value": "Setup Code"
+    },
+    {
+      "name": "connect_resolved_endpoint",
+      "value": "Resolved endpoint"
+    },
+    {
+      "name": "connect_validation_manual_host_port",
+      "value": "Enter a valid manual host and port to connect."
+    },
+    {
+      "name": "connect_quickfill_android_emulator",
+      "value": "Android Emulator"
+    },
+    {
+      "name": "connect_quickfill_localhost",
+      "value": "Localhost"
+    },
+    {
+      "name": "chat_empty_state",
+      "value": "Connect to gateway to chat"
+    },
+    {
+      "name": "chat_error_header",
+      "value": "CHAT ERROR"
+    },
+    {
+      "name": "chat_send",
+      "value": "Send"
+    },
+    {
+      "name": "chat_input_placeholder",
+      "value": "Type a message…"
+    },
+    {
+      "name": "chat_gateway_offline_hint",
+      "value": "Gateway is offline. Connect first in the Connect tab."
+    },
+    {
+      "name": "chat_no_messages_yet",
+      "value": "No messages yet"
+    },
+    {
+      "name": "chat_send_first_prompt",
+      "value": "Send the first prompt to start this session."
+    },
+    {
+      "name": "chat_connect_first_hint",
+      "value": "Connect gateway first, then return to chat."
+    },
+    {
+      "name": "chat_refresh",
+      "value": "Refresh"
+    },
+    {
+      "name": "chat_thinking",
+      "value": "Thinking…"
+    },
+    {
+      "name": "chat_abort",
+      "value": "Abort"
+    },
+    {
+      "name": "chat_thinking_off",
+      "value": "Off"
+    },
+    {
+      "name": "chat_thinking_low",
+      "value": "Low"
+    },
+    {
+      "name": "chat_thinking_medium",
+      "value": "Medium"
+    },
+    {
+      "name": "chat_thinking_high",
+      "value": "High"
+    },
+    {
+      "name": "settings_section_settings",
+      "value": "SETTINGS"
+    },
+    {
+      "name": "settings_device_configuration_title",
+      "value": "Device configuration"
+    },
+    {
+      "name": "settings_device_configuration_subtitle",
+      "value": "Manage capabilities, permissions, and diagnostics."
+    },
+    {
+      "name": "settings_instance_id_label",
+      "value": "Instance ID: %s"
+    },
+    {
+      "name": "settings_name_label",
+      "value": "Name"
+    },
+    {
+      "name": "settings_clear_pairing_subtitle",
+      "value": "Remove all pairing data and credentials."
+    },
+    {
+      "name": "settings_clear_pairing_button",
+      "value": "Clear"
+    },
+    {
+      "name": "settings_section_node",
+      "value": "NODE"
+    },
+    {
+      "name": "settings_version_label",
+      "value": "Version %s"
+    },
+    {
+      "name": "settings_device_label",
+      "value": "Device %s"
+    },
+    {
+      "name": "settings_clear_pairing",
+      "value": "Clear pairing"
+    },
+    {
+      "name": "settings_version",
+      "value": "Version"
+    },
+    {
+      "name": "onboarding_first_run_kicker",
+      "value": "First run"
+    },
+    {
+      "name": "onboarding_title_mobile_setup",
+      "value": "OpenClaw Mobile Setup"
+    },
+    {
+      "name": "onboarding_step_welcome_label",
+      "value": "Welcome"
+    },
+    {
+      "name": "onboarding_step_gateway_label",
+      "value": "Gateway"
+    },
+    {
+      "name": "onboarding_step_permissions_label",
+      "value": "Permissions"
+    },
+    {
+      "name": "onboarding_step_final_check_label",
+      "value": "Connect"
+    },
+    {
+      "name": "onboarding_step_of_fmt",
+      "value": "Step %d of %d"
+    },
+    {
+      "name": "onboarding_step_welcome_title",
+      "value": "What you get"
+    },
+    {
+      "name": "onboarding_step_welcome_bullet_control_gateway",
+      "value": "Control the gateway and operator chat from one mobile surface."
+    },
+    {
+      "name": "onboarding_step_welcome_bullet_connect_setup_code",
+      "value": "Connect with setup code and recover pairing with CLI commands."
+    },
+    {
+      "name": "onboarding_step_welcome_bullet_enable_permissions",
+      "value": "Enable only the permissions and capabilities you want."
+    },
+    {
+      "name": "onboarding_step_welcome_bullet_finish_check",
+      "value": "Finish with a real connection check before entering the app."
+    },
+    {
+      "name": "onboarding_gateway_section_title",
+      "value": "Gateway connection"
+    },
+    {
+      "name": "onboarding_gateway_scan_title",
+      "value": "Scan onboarding QR"
+    },
+    {
+      "name": "onboarding_run_on_gateway_host",
+      "value": "Run on the gateway host:"
+    },
+    {
+      "name": "onboarding_then_scan_with_device",
+      "value": "Then scan with this device."
+    },
+    {
+      "name": "onboarding_scan_qr_button",
+      "value": "Scan QR code"
+    },
+    {
+      "name": "onboarding_qr_captured_review_endpoint",
+      "value": "QR captured. Review endpoint below."
+    },
+    {
+      "name": "onboarding_resolved_endpoint_header",
+      "value": "RESOLVED ENDPOINT"
+    },
+    {
+      "name": "onboarding_advanced_setup_title",
+      "value": "Advanced setup"
+    },
+    {
+      "name": "onboarding_advanced_setup_subtitle",
+      "value": "Paste setup code or enter host/port manually."
+    },
+    {
+      "name": "onboarding_advanced_setup_expand",
+      "value": "Expand advanced setup"
+    },
+    {
+      "name": "onboarding_advanced_setup_collapse",
+      "value": "Collapse advanced setup"
+    },
+    {
+      "name": "onboarding_manual_setup_commands_title",
+      "value": "Manual setup commands"
+    },
+    {
+      "name": "onboarding_manual_setup_json_hint",
+      "value": "`--json` prints `setupCode` and `gatewayUrl`."
+    },
+    {
+      "name": "onboarding_manual_setup_auto_discovery_hint",
+      "value": "Auto URL discovery is not wired yet. Android emulator uses `10.0.2.2`; real devices need LAN/Tailscale host."
+    },
+    {
+      "name": "onboarding_setup_code_label",
+      "value": "Setup code"
+    },
+    {
+      "name": "onboarding_setup_code_placeholder",
+      "value": "Paste code from openclaw qr --setup-code-only"
+    },
+    {
+      "name": "onboarding_quickfill_android_emulator",
+      "value": "Android emulator"
+    },
+    {
+      "name": "onboarding_quickfill_localhost",
+      "value": "Localhost"
+    },
+    {
+      "name": "onboarding_manual_host_label",
+      "value": "Host"
+    },
+    {
+      "name": "onboarding_manual_host_placeholder",
+      "value": "10.0.2.2"
+    },
+    {
+      "name": "onboarding_manual_port_label",
+      "value": "Port"
+    },
+    {
+      "name": "onboarding_manual_port_placeholder",
+      "value": "18789"
+    },
+    {
+      "name": "onboarding_use_tls",
+      "value": "Use TLS"
+    },
+    {
+      "name": "onboarding_use_tls_subtitle",
+      "value": "Switch to secure websocket (`wss`)."
+    },
+    {
+      "name": "onboarding_token_optional_label",
+      "value": "Token (optional)"
+    },
+    {
+      "name": "onboarding_token_optional_placeholder",
+      "value": "token"
+    },
+    {
+      "name": "onboarding_password_optional_label",
+      "value": "Password (optional)"
+    },
+    {
+      "name": "onboarding_password_optional_placeholder",
+      "value": "password"
+    },
+    {
+      "name": "onboarding_permissions_title",
+      "value": "Permissions"
+    },
+    {
+      "name": "onboarding_permissions_intro",
+      "value": "Enable only the permissions you need. You can change these later in Settings."
+    },
+    {
+      "name": "onboarding_perm_camera_title",
+      "value": "Camera"
+    },
+    {
+      "name": "onboarding_perm_microphone_title",
+      "value": "Microphone"
+    },
+    {
+      "name": "onboarding_perm_notifications_title",
+      "value": "Notifications"
+    },
+    {
+      "name": "onboarding_permissions_footer",
+      "value": "All settings can be changed later in Settings."
+    },
+    {
+      "name": "onboarding_review_title",
+      "value": "Review"
+    },
+    {
+      "name": "onboarding_review_method_label",
+      "value": "Method"
+    },
+    {
+      "name": "onboarding_review_method_qr_setup_code",
+      "value": "QR / Setup Code"
+    },
+    {
+      "name": "onboarding_review_gateway_label",
+      "value": "Gateway"
+    },
+    {
+      "name": "onboarding_review_enabled_perms_label",
+      "value": "Enabled permissions"
+    },
+    {
+      "name": "onboarding_review_connect_hint",
+      "value": "Tap Connect to verify gateway connectivity and auth."
+    },
+    {
+      "name": "onboarding_review_status_fmt",
+      "value": "Status: %s"
+    },
+    {
+      "name": "onboarding_review_status_label",
+      "value": "Status"
+    },
+    {
+      "name": "onboarding_review_pairing_required_title",
+      "value": "Pairing required"
+    },
+    {
+      "name": "onboarding_review_then_tap_connect_again",
+      "value": "Then tap Connect again."
+    },
+    {
+      "name": "onboarding_review_connected_to_fmt",
+      "value": "Connected to gateway"
+    }
+  ]
+}
