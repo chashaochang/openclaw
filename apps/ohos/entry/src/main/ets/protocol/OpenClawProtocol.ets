@@ -25,14 +25,38 @@ export const OpenClawSystemCommand: OpenClawSystemCommandType = {
   Notify: 'system.notify',
 };
 
+export interface OpenClawLocationCommandType {
+  Get: string;
+}
+
+export const OpenClawLocationCommand: OpenClawLocationCommandType = {
+  Get: 'location.get',
+};
+
+export interface OpenClawCameraCommandType {
+  List: string;
+  Snap: string;
+  Clip: string;
+}
+
+export const OpenClawCameraCommand: OpenClawCameraCommandType = {
+  List: 'camera.list',
+  Snap: 'camera.snap',
+  Clip: 'camera.clip',
+};
+
 export interface OpenClawCapabilityType {
   readonly Canvas: string;
+  readonly Camera: string;
+  readonly Location: string;
   readonly Device: string;
   readonly System: string;
 }
 
 export const OpenClawCapability: OpenClawCapabilityType = {
   Canvas: 'canvas',
+  Camera: 'camera',
+  Location: 'location',
   Device: 'device',
   System: 'system',
 };

@@ -1,13 +1,15 @@
 /**
  * Node runtime: gateway, chat, invoke. Central app state.
  */
-import { common } from "@kit.AbilityKit";
+import { abilityAccessCtrl, common, Permissions } from "@kit.AbilityKit";
 import { deviceInfo } from "@kit.BasicServicesKit";
 import {
   OpenClawCapability,
+  OpenClawCameraCommand,
   OpenClawCanvasA2UICommand,
   OpenClawCanvasCommand,
   OpenClawDeviceCommand,
+  OpenClawLocationCommand,
   OpenClawSystemCommand,
 } from "./protocol/OpenClawProtocol";
 import { SecurePrefs } from "./common/SecurePrefs";
@@ -19,6 +21,8 @@ import { ChatController } from "./chat/ChatController";
 import { DeviceHandler } from "./node/DeviceHandler";
 import { SystemHandler } from "./node/SystemHandler";
 import { InvokeDispatcher } from "./node/InvokeDispatcher";
+import { CameraHandler } from "./node/CameraHandler";
+import { LocationHandler } from "./node/LocationHandler";
 import { CanvasWebHost, OpenClawCanvasA2UIBridge } from "./canvas/CanvasWebHost";
 import { CanvasInvokeHandler } from "./canvas/CanvasInvokeHandler";
 import { isTrustedCanvasActionUrl } from "./canvas/CanvasActionTrust";
@@ -47,6 +51,12 @@ interface HomeCanvasPayloadShape {
   footer: string;
 }
 
+interface NodePermissionsShape {
+  camera: boolean;
+  location: boolean;
+  microphone: boolean;
+}
+
 export type StatusListener = (status: NodeStatus) => void;
 
 export interface NodeStatus {
@@ -69,6 +79,7 @@ export class NodeRuntime {
   private _remoteAddress = "";
   private _onboardingCompleted = false;
   private _onboardingListener: ((completed: boolean) => void) | null = null;
+  private foregroundActive = true;
   private canvasWebHost: CanvasWebHost = new CanvasWebHost();
   private a2uiBridge: OpenClawCanvasA2UIBridge;
   private voiceCoordinator: VoiceCoordinator;
@@ -290,6 +301,22 @@ export class NodeRuntime {
     });
   }
 
+  private hasAnyPermission(permissionNames: Permissions[]): boolean {
+    const atManager = abilityAccessCtrl.createAtManager();
+    const tokenId = this.context.applicationInfo.accessTokenId;
+    for (let i = 0; i < permissionNames.length; i++) {
+      try {
+        const status = atManager.checkAccessTokenSync(tokenId, permissionNames[i]);
+        if (status === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+          return true;
+        }
+      } catch {
+        // Ignore permission names unsupported on this build.
+      }
+    }
+    return false;
+  }
+
   async getCanvasDebugEnabled(): Promise<boolean> {
     return this.prefs.getBooleanOr("canvas.debug.enabled", false);
   }
@@ -317,6 +344,10 @@ export class NodeRuntime {
 
   setVoiceScreenActive(active: boolean): void {
     this.voiceCoordinator.setVoiceScreenActive(active);
+  }
+
+  setForegroundActive(active: boolean): void {
+    this.foregroundActive = active;
   }
 
   getVoiceMicEnabled(): boolean {
@@ -466,6 +497,8 @@ export class NodeRuntime {
         const dispatcher = new InvokeDispatcher(
           new DeviceHandler(this.context),
           new SystemHandler(),
+          new CameraHandler(this.context, () => this.foregroundActive),
+          new LocationHandler(this.context, () => this.foregroundActive),
           this.makeCanvasInvokeHandler(),
         );
         return dispatcher.handleInvoke(req);
@@ -526,6 +559,8 @@ export class NodeRuntime {
       OpenClawCapability.Device,
       OpenClawCapability.System,
       OpenClawCapability.Canvas,
+      OpenClawCapability.Camera,
+      OpenClawCapability.Location,
     ];
     const commands: string[] = [
       OpenClawDeviceCommand.Status,
@@ -533,6 +568,10 @@ export class NodeRuntime {
       OpenClawDeviceCommand.Permissions,
       OpenClawDeviceCommand.Health,
       OpenClawSystemCommand.Notify,
+      OpenClawCameraCommand.List,
+      OpenClawCameraCommand.Snap,
+      OpenClawCameraCommand.Clip,
+      OpenClawLocationCommand.Get,
       OpenClawCanvasCommand.Present,
       OpenClawCanvasCommand.Hide,
       OpenClawCanvasCommand.Navigate,
@@ -542,12 +581,20 @@ export class NodeRuntime {
       OpenClawCanvasA2UICommand.PushJSONL,
       OpenClawCanvasA2UICommand.Reset,
     ];
+    const permissions: NodePermissionsShape = {
+      camera: this.hasAnyPermission(["ohos.permission.CAMERA"]),
+      location: this.hasAnyPermission([
+        "ohos.permission.APPROXIMATELY_LOCATION",
+        "ohos.permission.LOCATION",
+      ]),
+      microphone: this.hasAnyPermission(["ohos.permission.MICROPHONE"]),
+    };
     return {
       role: "node",
       scopes: [],
       caps,
       commands,
-      permissions: {},
+      permissions,
       client: await this.buildClientInfo("node"),
       userAgent: `OpenClawAndroid/${VERSION} (Android 14; SDK 34)`,
     };

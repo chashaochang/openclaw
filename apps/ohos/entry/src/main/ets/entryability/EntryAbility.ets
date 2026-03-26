@@ -51,6 +51,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
     const runtime = AppStorage.get<NodeRuntime>('nodeRuntime');
     if (runtime) {
+      runtime.setForegroundActive(true);
       void runtime.reconnectGatewayOnForeground();
     }
   }
@@ -58,5 +59,9 @@ export default class EntryAbility extends UIAbility {
   onBackground(): void {
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
+    const runtime = AppStorage.get<NodeRuntime>('nodeRuntime');
+    if (runtime) {
+      runtime.setForegroundActive(false);
+    }
   }
 }

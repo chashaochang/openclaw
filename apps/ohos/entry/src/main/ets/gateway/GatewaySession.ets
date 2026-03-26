@@ -29,12 +29,18 @@ export interface GatewayClientInfo {
   modelIdentifier?: string;
 }
 
+export interface GatewayPermissions {
+  camera?: boolean;
+  location?: boolean;
+  microphone?: boolean;
+}
+
 export interface GatewayConnectOptions {
   role: string;
   scopes: string[];
   caps: string[];
   commands: string[];
-  permissions: Record<string, boolean>;
+  permissions: GatewayPermissions;
   client: GatewayClientInfo;
   userAgent?: string;
 }
@@ -118,7 +124,7 @@ interface ConnectParamsShape {
   scopes: string[];
   caps: string[];
   commands: string[];
-  permissions: Record<string, boolean>;
+  permissions: GatewayPermissions;
   locale: string;
   auth?: JsonRecord;
   device?: DeviceJsonShape;
