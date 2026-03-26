@@ -3,7 +3,7 @@
  */
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
-import { notificationManager } from '@kit.NotificationKit';
+import { notificationExtensionSubscription, notificationManager } from '@kit.NotificationKit';
 import { NodeRuntime } from '../NodeRuntime';
 
 interface StatusChipColorSet {
@@ -30,6 +30,7 @@ export struct SettingsTabScreen {
   @State hasCameraPermission: boolean = false;
   @State hasLocationPermission: boolean = false;
   @State notificationsEnabled: boolean = false;
+  @State notificationListenerEnabled: boolean = false;
   @State refreshBusy: boolean = false;
 
   private resStr(res: Resource): string {
@@ -127,6 +128,11 @@ export struct SettingsTabScreen {
       this.notificationsEnabled = await notificationManager.isNotificationEnabled();
     } catch {
       this.notificationsEnabled = false;
+    }
+    try {
+      this.notificationListenerEnabled = await notificationExtensionSubscription.isUserGranted();
+    } catch {
+      this.notificationListenerEnabled = false;
     }
   }
 
@@ -237,6 +243,19 @@ export struct SettingsTabScreen {
       await notificationManager.requestEnableNotification(ctx);
     } catch {
       // best-effort
+    }
+    await this.refreshNotificationsEnabled();
+  }
+
+  private async requestNotificationListener(): Promise<void> {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return;
+    }
+    try {
+      await notificationExtensionSubscription.openSubscriptionSettings(ctx);
+    } catch {
+      this.openAppSettings();
     }
     await this.refreshNotificationsEnabled();
   }
@@ -621,13 +640,22 @@ export struct SettingsTabScreen {
               Text($r('app.string.settings_permission_notification_listener_sub'))
                 .fontSize(13)
                 .fontColor('#8A92A2')
-              Text(this.resStr($r('app.string.settings_permission_unavailable_platform')))
+              Text(this.notificationListenerEnabled ? this.resStr($r('app.string.settings_permission_granted')) : '—')
                 .fontSize(12)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#8A92A2')
+                .fontColor(this.notificationListenerEnabled ? '#2F8C5A' : '#C8841A')
             }
             .alignItems(HorizontalAlign.Start)
             .layoutWeight(1)
+            Button(this.notificationListenerEnabled ? this.resStr($r('app.string.settings_permission_manage')) : this.resStr($r('app.string.settings_permission_grant')))
+              .height(36)
+              .padding({ left: 18, right: 18 })
+              .backgroundColor(this.notificationListenerEnabled ? '#EEF1F6' : '#17181C')
+              .fontColor(this.notificationListenerEnabled ? '#17181C' : Color.White)
+              .borderRadius(14)
+              .onClick(() => {
+                void this.requestNotificationListener();
+              })
           }
           .width('100%')
           .padding({ top: 12, bottom: 12 })

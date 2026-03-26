@@ -10,6 +10,7 @@ import {
   OpenClawCanvasCommand,
   OpenClawDeviceCommand,
   OpenClawLocationCommand,
+  OpenClawNotificationsCommand,
   OpenClawSystemCommand,
 } from "./protocol/OpenClawProtocol";
 import { SecurePrefs } from "./common/SecurePrefs";
@@ -23,6 +24,7 @@ import { SystemHandler } from "./node/SystemHandler";
 import { InvokeDispatcher } from "./node/InvokeDispatcher";
 import { CameraHandler } from "./node/CameraHandler";
 import { LocationHandler } from "./node/LocationHandler";
+import { NotificationsHandler } from "./node/NotificationsHandler";
 import { CanvasWebHost, OpenClawCanvasA2UIBridge } from "./canvas/CanvasWebHost";
 import { CanvasInvokeHandler } from "./canvas/CanvasInvokeHandler";
 import { isTrustedCanvasActionUrl } from "./canvas/CanvasActionTrust";
@@ -499,6 +501,7 @@ export class NodeRuntime {
           new SystemHandler(),
           new CameraHandler(this.context, () => this.foregroundActive),
           new LocationHandler(this.context, () => this.foregroundActive),
+          new NotificationsHandler(this.context),
           this.makeCanvasInvokeHandler(),
         );
         return dispatcher.handleInvoke(req);
@@ -561,6 +564,7 @@ export class NodeRuntime {
       OpenClawCapability.Canvas,
       OpenClawCapability.Camera,
       OpenClawCapability.Location,
+      OpenClawCapability.Notifications,
     ];
     const commands: string[] = [
       OpenClawDeviceCommand.Status,
@@ -572,6 +576,8 @@ export class NodeRuntime {
       OpenClawCameraCommand.Snap,
       OpenClawCameraCommand.Clip,
       OpenClawLocationCommand.Get,
+      OpenClawNotificationsCommand.List,
+      OpenClawNotificationsCommand.Actions,
       OpenClawCanvasCommand.Present,
       OpenClawCanvasCommand.Hide,
       OpenClawCanvasCommand.Navigate,

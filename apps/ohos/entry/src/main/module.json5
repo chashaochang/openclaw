@@ -41,6 +41,14 @@
           "abilities": ["EntryAbility"],
           "when": "inuse"
         }
+      },
+      {
+        "name": "ohos.permission.SUBSCRIBE_NOTIFICATION",
+        "reason": "$string:permission_notification_listener_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
       }
     ],
     "type": "entry",
@@ -86,6 +94,12 @@
             "resource": "$profile:backup_config"
           }
         ],
+      },
+      {
+        "name": "NotificationSubscriberExtAbility",
+        "srcEntry": "./ets/entryability/NotificationSubscriberExtAbility.ets",
+        "type": "notificationSubscriber",
+        "exported": false
       }
     ]
   }

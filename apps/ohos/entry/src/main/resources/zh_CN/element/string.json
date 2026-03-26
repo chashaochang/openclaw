@@ -29,6 +29,10 @@
       "value": "允许位置访问，用于网关发现与位置工具"
     },
     {
+      "name": "permission_notification_listener_reason",
+      "value": "允许通知订阅，让 OpenClaw 读取收到的通知"
+    },
+    {
       "name": "connect_scan_qr",
       "value": "扫描二维码"
     },

@@ -7,11 +7,11 @@
         "material": {
           "certpath": "/Users/machunjiang/.ohos/config/default_ohos_qfMOnsIgXvnY7AV3HuF1Ur7y5AdaScZuJbD11EVY4Uk=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B21B4B51AB546E434BBC568108CFF0740DCAA7341634232A0A5DC2C3CB8E78043E4226F959CE545",
+          "keyPassword": "0000001ABB7C63E3C0FB8DA7C27634781921C08B0605B302A1FD1AF51EF5563B574F2DF792053EEA22CF",
           "profile": "/Users/machunjiang/.ohos/config/default_ohos_qfMOnsIgXvnY7AV3HuF1Ur7y5AdaScZuJbD11EVY4Uk=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "/Users/machunjiang/.ohos/config/default_ohos_qfMOnsIgXvnY7AV3HuF1Ur7y5AdaScZuJbD11EVY4Uk=.p12",
-          "storePassword": "0000001B672A7633640C092BD47EE29392E3A8A00BBD2545C322C71DABBF5173BA00F6BF77288B1F58FEA7"
+          "storePassword": "0000001A5C22DFB9F83179B9DBF03BD93651A22756C24145A443BBD43AE2E29399DCE2DED2052EA44E2F"
         }
       }
     ],

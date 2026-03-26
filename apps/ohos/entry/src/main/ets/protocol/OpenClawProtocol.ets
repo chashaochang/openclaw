@@ -45,10 +45,21 @@ export const OpenClawCameraCommand: OpenClawCameraCommandType = {
   Clip: 'camera.clip',
 };
 
+export interface OpenClawNotificationsCommandType {
+  List: string;
+  Actions: string;
+}
+
+export const OpenClawNotificationsCommand: OpenClawNotificationsCommandType = {
+  List: 'notifications.list',
+  Actions: 'notifications.actions',
+};
+
 export interface OpenClawCapabilityType {
   readonly Canvas: string;
   readonly Camera: string;
   readonly Location: string;
+  readonly Notifications: string;
   readonly Device: string;
   readonly System: string;
 }
@@ -57,6 +68,7 @@ export const OpenClawCapability: OpenClawCapabilityType = {
   Canvas: 'canvas',
   Camera: 'camera',
   Location: 'location',
+  Notifications: 'notifications',
   Device: 'device',
   System: 'system',
 };

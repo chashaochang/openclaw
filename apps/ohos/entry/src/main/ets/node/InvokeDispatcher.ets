@@ -4,11 +4,13 @@
 import { OpenClawDeviceCommand, OpenClawSystemCommand } from '../protocol/OpenClawProtocol';
 import { OpenClawCameraCommand } from '../protocol/OpenClawProtocol';
 import { OpenClawLocationCommand } from '../protocol/OpenClawProtocol';
+import { OpenClawNotificationsCommand } from '../protocol/OpenClawProtocol';
 import type { InvokeRequest, InvokeResult, InvokeErrorShape } from '../gateway/GatewaySession';
 import { DeviceHandler } from './DeviceHandler';
 import { SystemHandler } from './SystemHandler';
 import { CameraHandler } from './CameraHandler';
 import { LocationHandler } from './LocationHandler';
+import { NotificationsHandler } from './NotificationsHandler';
 import type { CanvasInvokeHandler } from '../canvas/CanvasInvokeHandler';
 
 const SUPPORTED_COMMANDS = new Set<string>([
@@ -21,6 +23,8 @@ const SUPPORTED_COMMANDS = new Set<string>([
   OpenClawCameraCommand.Snap,
   OpenClawCameraCommand.Clip,
   OpenClawLocationCommand.Get,
+  OpenClawNotificationsCommand.List,
+  OpenClawNotificationsCommand.Actions,
 ]);
 
 function errResult(code: string, message: string): InvokeResult {
@@ -33,6 +37,7 @@ export class InvokeDispatcher {
   private systemHandler: SystemHandler;
   private cameraHandler: CameraHandler;
   private locationHandler: LocationHandler;
+  private notificationsHandler: NotificationsHandler;
   private canvasHandler: CanvasInvokeHandler | null;
 
   constructor(
@@ -40,12 +45,14 @@ export class InvokeDispatcher {
     systemHandler: SystemHandler,
     cameraHandler: CameraHandler,
     locationHandler: LocationHandler,
+    notificationsHandler: NotificationsHandler,
     canvasHandler: CanvasInvokeHandler | null = null,
   ) {
     this.deviceHandler = deviceHandler;
     this.systemHandler = systemHandler;
     this.cameraHandler = cameraHandler;
     this.locationHandler = locationHandler;
+    this.notificationsHandler = notificationsHandler;
     this.canvasHandler = canvasHandler;
   }
 
@@ -87,6 +94,12 @@ export class InvokeDispatcher {
     }
     if (command === OpenClawLocationCommand.Get) {
       return this.locationHandler.handleLocationGet(paramsJson);
+    }
+    if (command === OpenClawNotificationsCommand.List) {
+      return this.notificationsHandler.handleNotificationsList(paramsJson);
+    }
+    if (command === OpenClawNotificationsCommand.Actions) {
+      return this.notificationsHandler.handleNotificationsActions(paramsJson);
     }
     return errResult('INVALID_REQUEST', 'INVALID_REQUEST: unknown command');
   }

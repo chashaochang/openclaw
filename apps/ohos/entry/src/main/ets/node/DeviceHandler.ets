@@ -180,8 +180,10 @@ export class DeviceHandler {
       status: notificationsGranted ? 'granted' : 'denied',
       promptable: !notificationsGranted,
     };
-    // OpenHarmony has no Android-style NotificationListener service API surface.
-    const notificationListener: PermissionEntry = { status: 'denied', promptable: false };
+    const notificationListener: PermissionEntry = {
+      status: 'denied',
+      promptable: true,
+    };
     const photos: PermissionEntry = { status: 'denied', promptable: false };
     const contacts: PermissionEntry = { status: 'denied', promptable: false };
     const calendar: PermissionEntry = { status: 'denied', promptable: false };

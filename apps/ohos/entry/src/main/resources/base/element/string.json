@@ -29,6 +29,10 @@
       "value": "Allow location access for gateway discovery and location tools"
     },
     {
+      "name": "permission_notification_listener_reason",
+      "value": "Allow notification subscription so OpenClaw can read incoming notifications"
+    },
+    {
       "name": "connect_scan_qr",
       "value": "Scan QR Code"
     },
