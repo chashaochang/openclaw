@@ -1,7 +1,10 @@
 /**
  * Device invoke handler: status, info, permissions, health.
  */
+import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
+import { i18n } from '@kit.LocalizationKit';
+import { notificationManager } from '@kit.NotificationKit';
 import type { InvokeResult } from '../gateway/GatewaySession';
 
 const APP_VERSION = '1.0.0';
@@ -83,6 +86,13 @@ interface HealthPayload {
 }
 
 export class DeviceHandler {
+  private context: common.UIAbilityContext;
+  private startedAtMs: number = Date.now();
+
+  constructor(context: common.UIAbilityContext) {
+    this.context = context;
+  }
+
   handleDeviceStatus(_paramsJson: string | null): InvokeResult {
     const r: InvokeResult = { ok: true, payloadJson: this.statusPayloadJson(), error: null };
     return r;
@@ -108,13 +118,20 @@ export class DeviceHandler {
     const thermal: ThermalStatus = { state: 'nominal' };
     const storage: StorageStatus = { totalBytes: 0, freeBytes: 0, usedBytes: 0 };
     const network: NetworkStatus = { status: 'satisfied', isExpensive: false, isConstrained: false, interfaces: ['other'] };
-    const payload: StatusPayload = { battery, thermal, storage, network, uptimeSeconds: 0 };
+    const uptimeSeconds = Math.max(0, Math.floor((Date.now() - this.startedAtMs) / 1000));
+    const payload: StatusPayload = { battery, thermal, storage, network, uptimeSeconds: uptimeSeconds };
     return JSON.stringify(payload);
   }
 
   private infoPayloadJson(): string {
     const deviceName = deviceInfo.deviceType ?? 'HarmonyOS';
     const systemVersion = deviceInfo.osFullName ?? '';
+    let locale = 'zh-CN';
+    try {
+      locale = i18n.System.getSystemLocale();
+    } catch {
+      // keep default
+    }
     const payload: InfoPayload = {
       deviceName: deviceName,
       modelIdentifier: deviceName,
@@ -122,19 +139,67 @@ export class DeviceHandler {
       systemVersion: systemVersion,
       appVersion: APP_VERSION,
       appBuild: APP_BUILD,
-      locale: 'zh-CN',
+      locale: locale,
     };
     return JSON.stringify(payload);
   }
 
+  private permissionEntryForAny(permissionNames: Permissions[]): PermissionEntry {
+    const at = abilityAccessCtrl.createAtManager();
+    const tokenId = this.context.applicationInfo.accessTokenId;
+    for (let i = 0; i < permissionNames.length; i++) {
+      const p = permissionNames[i];
+      try {
+        const s = at.checkAccessTokenSync(tokenId, p);
+        if (s === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+          const e: PermissionEntry = { status: 'granted', promptable: false };
+          return e;
+        }
+      } catch {
+        // ignored: unknown permission on this API/device
+      }
+    }
+    const denied: PermissionEntry = { status: 'denied', promptable: true };
+    return denied;
+  }
+
   private permissionsPayloadJson(): string {
-    const camera: PermissionEntry = { status: 'denied', promptable: true };
-    const microphone: PermissionEntry = { status: 'denied', promptable: true };
-    const location: PermissionEntry = { status: 'denied', promptable: true };
+    const camera = this.permissionEntryForAny(['ohos.permission.CAMERA']);
+    const microphone = this.permissionEntryForAny(['ohos.permission.MICROPHONE']);
+    const location = this.permissionEntryForAny([
+      'ohos.permission.APPROXIMATELY_LOCATION',
+      'ohos.permission.LOCATION',
+    ]);
+    let notificationsGranted = false;
+    try {
+      notificationsGranted = notificationManager.isNotificationEnabledSync();
+    } catch {
+      notificationsGranted = false;
+    }
+    const notifications: PermissionEntry = {
+      status: notificationsGranted ? 'granted' : 'denied',
+      promptable: !notificationsGranted,
+    };
+    // OpenHarmony has no Android-style NotificationListener service API surface.
+    const notificationListener: PermissionEntry = { status: 'denied', promptable: false };
+    const photos: PermissionEntry = { status: 'denied', promptable: false };
+    const contacts: PermissionEntry = { status: 'denied', promptable: false };
+    const calendar: PermissionEntry = { status: 'denied', promptable: false };
+    const motion: PermissionEntry = { status: 'denied', promptable: false };
+    const sms: PermissionEntry = { status: 'denied', promptable: false };
+    const callLog: PermissionEntry = { status: 'denied', promptable: false };
     const permissions: Record<string, PermissionEntry> = {};
     permissions['camera'] = camera;
     permissions['microphone'] = microphone;
     permissions['location'] = location;
+    permissions['notifications'] = notifications;
+    permissions['notificationListener'] = notificationListener;
+    permissions['photos'] = photos;
+    permissions['contacts'] = contacts;
+    permissions['calendar'] = calendar;
+    permissions['motion'] = motion;
+    permissions['sms'] = sms;
+    permissions['callLog'] = callLog;
     const payload: PermissionsPayload = { permissions };
     return JSON.stringify(payload);
   }

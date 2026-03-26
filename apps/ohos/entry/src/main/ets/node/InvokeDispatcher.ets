@@ -5,6 +5,7 @@ import { OpenClawDeviceCommand, OpenClawSystemCommand } from '../protocol/OpenCl
 import type { InvokeRequest, InvokeResult, InvokeErrorShape } from '../gateway/GatewaySession';
 import { DeviceHandler } from './DeviceHandler';
 import { SystemHandler } from './SystemHandler';
+import type { CanvasInvokeHandler } from '../canvas/CanvasInvokeHandler';
 
 const SUPPORTED_COMMANDS = new Set<string>([
   OpenClawDeviceCommand.Status,
@@ -22,15 +23,27 @@ function errResult(code: string, message: string): InvokeResult {
 export class InvokeDispatcher {
   private deviceHandler: DeviceHandler;
   private systemHandler: SystemHandler;
+  private canvasHandler: CanvasInvokeHandler | null;
 
-  constructor(deviceHandler: DeviceHandler, systemHandler: SystemHandler) {
+  constructor(
+    deviceHandler: DeviceHandler,
+    systemHandler: SystemHandler,
+    canvasHandler: CanvasInvokeHandler | null = null,
+  ) {
     this.deviceHandler = deviceHandler;
     this.systemHandler = systemHandler;
+    this.canvasHandler = canvasHandler;
   }
 
   async handleInvoke(request: InvokeRequest): Promise<InvokeResult> {
     const command = request.command;
     const paramsJson = request.paramsJson;
+    if (this.canvasHandler) {
+      const canvasRes = await this.canvasHandler.tryHandle(command, paramsJson);
+      if (canvasRes !== null) {
+        return canvasRes;
+      }
+    }
     if (!SUPPORTED_COMMANDS.has(command)) {
       return errResult('INVALID_REQUEST', 'INVALID_REQUEST: unknown command');
     }

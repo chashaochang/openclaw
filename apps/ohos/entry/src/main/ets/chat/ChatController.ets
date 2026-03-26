@@ -2,7 +2,9 @@
  * Chat controller: sessions, messages, send, streaming.
  */
 import type { GatewaySession } from '../gateway/GatewaySession';
-import type { ChatMessage, ChatMessageContent, ChatSessionEntry } from './ChatModels';
+import { buildTalkSpeakRpcParams } from '../voice/TalkDirectiveParser';
+import type { TalkDirective } from '../voice/TalkDirectiveParser';
+import type { ChatMessage, ChatMessageContent, ChatPendingToolCall, ChatSessionEntry } from './ChatModels';
 
 export interface ChatHistoryResult {
   messages: ChatMessage[];
@@ -55,6 +57,7 @@ interface SessionsListPayload {
 
 export interface ChatState {
   sessionKey: string;
+  mainSessionKey: string;
   messages: ChatMessage[];
   errorText: string | null;
   healthOk: boolean;
@@ -62,6 +65,28 @@ export interface ChatState {
   pendingRunCount: number;
   thinkingLevel: string;
   sessions: ChatSessionEntry[];
+  pendingToolCalls: ChatPendingToolCall[];
+}
+
+export interface BootstrapOptions {
+  skipSessionFetch?: boolean;
+  sessionLimit?: number;
+}
+
+export interface TalkSpeakResult {
+  audioBase64: string;
+  mimeType: string | null;
+  outputFormat: string | null;
+  fileExtension: string | null;
+}
+
+/** Gateway talk.speak RPC (directive + persisted voice/model from VoiceCoordinator). */
+export interface TalkSpeakRequest {
+  text: string;
+  language: string;
+  directive: TalkDirective | null;
+  persistentVoiceId: string | null;
+  persistentModelId: string | null;
 }
 
 
@@ -75,6 +100,7 @@ export class ChatController {
   private session: GatewaySession;
   private listener: ChatStateListener | null = null;
   private _sessionKey = 'main';
+  private _mainSessionKey = 'main';
   private _messages: ChatMessage[] = [];
   private _errorText: string | null = null;
   private _healthOk = false;
@@ -83,6 +109,8 @@ export class ChatController {
   private _thinkingLevel = 'off';
   private _sessions: ChatSessionEntry[] = [];
   private pendingRuns = new Set<string>();
+  private pendingToolCallsById = new Map<string, ChatPendingToolCall>();
+  private _pendingToolCalls: ChatPendingToolCall[] = [];
 
   constructor(session: GatewaySession) {
     this.session = session;
@@ -110,13 +138,13 @@ export class ChatController {
     const k = (key ?? '').trim() || 'main';
     if (k === this._sessionKey) return;
     this._sessionKey = k;
-    this.bootstrap();
+    void this.bootstrap({ skipSessionFetch: true });
   }
 
   load(sessionKey: string): void {
     const key = (sessionKey ?? '').trim() || 'main';
     this._sessionKey = key;
-    this.bootstrap();
+    void this.bootstrap({ skipSessionFetch: true });
   }
 
   refreshSessions(): void {
@@ -127,6 +155,7 @@ export class ChatController {
     if (!this.listener) return;
     const state: ChatState = {
       sessionKey: this._sessionKey,
+      mainSessionKey: this._mainSessionKey,
       messages: this._messages,
       errorText: this._errorText,
       healthOk: this._healthOk,
@@ -134,6 +163,7 @@ export class ChatController {
       pendingRunCount: this._pendingRunCount,
       thinkingLevel: this._thinkingLevel,
       sessions: this._sessions,
+      pendingToolCalls: this._pendingToolCalls,
     };
     this.listener(state);
   }
@@ -142,24 +172,30 @@ export class ChatController {
     this._healthOk = false;
     this._errorText = null;
     this.clearPendingRuns();
+    this.clearPendingTools();
     this._streamingAssistantText = null;
     this.notify();
   }
 
   applyMainSessionKey(mainSessionKey: string): void {
     const trimmed = mainSessionKey.trim();
-    if (!trimmed || this._sessionKey === trimmed) return;
+    if (!trimmed) return;
+    this._mainSessionKey = trimmed;
+    if (this._sessionKey === trimmed) return;
     if (this._sessionKey !== 'main') return;
     this._sessionKey = trimmed;
-    this.bootstrap();
+    void this.bootstrap();
   }
 
-  async bootstrap(): Promise<void> {
+  async bootstrap(options: BootstrapOptions = {}): Promise<void> {
     this._errorText = null;
     this._healthOk = false;
     this.clearPendingRuns();
+    this.clearPendingTools();
     this._streamingAssistantText = null;
     const key = this._sessionKey;
+    const skipList = options.skipSessionFetch === true;
+    const sessionLimit = options.sessionLimit !== undefined ? options.sessionLimit : 50;
     try {
       const subParams: ChatSubscribeParams = { sessionKey: key };
       await this.session.sendNodeEvent('chat.subscribe', JSON.stringify(subParams));
@@ -170,8 +206,11 @@ export class ChatController {
       const tl = history.thinkingLevel?.trim();
       if (tl && tl.length > 0) this._thinkingLevel = normalizeThinking(tl);
       this.pollHealth();
-      this.fetchSessions(50);
-      this.notify();
+      if (!skipList && sessionLimit > 0) {
+        await this.fetchSessions(sessionLimit);
+      } else {
+        this.notify();
+      }
     } catch (err) {
       this._errorText = err instanceof Error ? err.message : String(err);
       this.notify();
@@ -204,9 +243,11 @@ export class ChatController {
         const item = arr[i] as Record<string, string | number>;
         const key = String(item['key'] ?? '');
         if (!key) continue;
+        const updatedRaw = item['updatedAtMs'] ?? item['updatedAt'];
+        const updatedAtMs = typeof updatedRaw === 'number' ? updatedRaw : undefined;
         out.push({
           key,
-          updatedAtMs: typeof item['updatedAtMs'] === 'number' ? item['updatedAtMs'] : undefined,
+          updatedAtMs: updatedAtMs,
           displayName: typeof item['displayName'] === 'string' ? item['displayName'] : undefined,
         });
       }
@@ -286,20 +327,27 @@ export class ChatController {
     this.notify();
   }
 
+  /**
+   * @returns Canonical run id from gateway (may differ from idempotencyKey). Null if send was skipped or failed.
+   */
   async sendMessage(
     message: string,
     thinking?: string,
-    attachments?: OutgoingAttachment[],
-  ): Promise<void> {
+    attachments?: OutgoingAttachment[] | undefined,
+    idempotencyKey?: string | null,
+  ): Promise<string | null> {
     const trimmed = (message ?? '').trim();
     const atts = attachments ?? [];
-    if (!trimmed && atts.length === 0) return;
+    if (!trimmed && atts.length === 0) {
+      return null;
+    }
     if (!this._healthOk) {
       this._errorText = 'Gateway health not OK; cannot send';
       this.notify();
-      return;
+      return null;
     }
-    const runId = randomId();
+    const keyTrim = (idempotencyKey ?? '').trim();
+    const runId = keyTrim.length > 0 ? keyTrim : randomId();
     const text = trimmed || 'See attached.';
     const thinkingVal = normalizeThinking(thinking ?? this._thinkingLevel);
     const userContent: ChatMessageContent[] = [{ type: 'text', text }];
@@ -321,6 +369,7 @@ export class ChatController {
     this._messages = [...this._messages, userMsg];
     this._errorText = null;
     this._streamingAssistantText = null;
+    this.clearPendingTools();
     this.pendingRuns.add(runId);
     this._pendingRunCount = this.pendingRuns.size;
     this.notify();
@@ -347,18 +396,60 @@ export class ChatController {
         sendRec['attachments'] = attachList;
       }
       const res = await this.session.request('chat.send', sendRec, 30000);
+      if (!res.ok) {
+        const errMsg = res.error?.message ?? 'chat.send failed';
+        this._errorText = errMsg;
+        this.pendingRuns.delete(runId);
+        this._pendingRunCount = this.pendingRuns.size;
+        this.notify();
+        return null;
+      }
       const payload = res.payloadJson ? JSON.parse(res.payloadJson) as Record<string, string> : {} as Record<string, string>;
-      const actualRunId = payload['runId'] ?? runId;
+      const actualRunId = String(payload['runId'] ?? runId).trim() || runId;
       if (actualRunId !== runId) {
         this.pendingRuns.delete(runId);
         this.pendingRuns.add(actualRunId);
       }
+      this._pendingRunCount = this.pendingRuns.size;
+      this.notify();
+      return actualRunId;
     } catch (err) {
       this.pendingRuns.delete(runId);
       this._errorText = err instanceof Error ? err.message : String(err);
     }
     this._pendingRunCount = this.pendingRuns.size;
     this.notify();
+    return null;
+  }
+
+  async requestTalkSpeak(req: TalkSpeakRequest): Promise<TalkSpeakResult | null> {
+    const t = (req.text ?? '').trim();
+    if (t.length === 0) {
+      return null;
+    }
+    const params = buildTalkSpeakRpcParams(
+      t,
+      req.language,
+      req.directive,
+      req.persistentVoiceId,
+      req.persistentModelId,
+    );
+    const res = await this.session.request('talk.speak', params, 30000);
+    if (!res.ok || !res.payloadJson) {
+      return null;
+    }
+    const root = JSON.parse(res.payloadJson) as Record<string, string>;
+    const audioBase64 = String(root['audioBase64'] ?? '').trim();
+    if (audioBase64.length === 0) {
+      return null;
+    }
+    const out: TalkSpeakResult = {
+      audioBase64: audioBase64,
+      mimeType: root['mimeType'] ? String(root['mimeType']).trim() : null,
+      outputFormat: root['outputFormat'] ? String(root['outputFormat']).trim() : null,
+      fileExtension: root['fileExtension'] ? String(root['fileExtension']).trim() : null,
+    };
+    return out;
   }
 
   handleGatewayEvent(event: string, payloadJson: string | null): void {
@@ -368,6 +459,14 @@ export class ChatController {
     }
     if (event === 'health') {
       this._healthOk = true;
+      this.notify();
+      return;
+    }
+    if (event === 'seqGap') {
+      this._errorText = 'Event stream interrupted; try refreshing.';
+      this.clearPendingRuns();
+      this.clearPendingTools();
+      this._streamingAssistantText = null;
       this.notify();
       return;
     }
@@ -387,8 +486,11 @@ export class ChatController {
       const sessionKey = (payload['sessionKey'] as string)?.trim();
       if (sessionKey && sessionKey !== this._sessionKey) return;
       const state = payload['state'] as string;
-      const runId = payload['runId'] as string;
+      const runIdRaw = payload['runId'];
+      const runId = runIdRaw !== undefined && runIdRaw !== null ? String(runIdRaw).trim() : '';
       if (state === 'delta') {
+        const isPending = runId.length === 0 ? true : this.pendingRuns.has(runId);
+        if (!isPending) return;
         const text = this.parseAssistantDeltaText(payload);
         if (text) {
           this._streamingAssistantText = text;
@@ -400,10 +502,15 @@ export class ChatController {
         if (state === 'error') {
           this._errorText = (payload['errorMessage'] as string) ?? 'Chat failed';
         }
-        if (runId && runId.length > 0) this.pendingRuns.delete(runId);
-        else this.clearPendingRuns();
+        this.clearPendingTools();
+        if (runId.length > 0) {
+          this.pendingRuns.delete(runId);
+          this._pendingRunCount = this.pendingRuns.size;
+        } else {
+          this.clearPendingRuns();
+        }
         this._streamingAssistantText = null;
-        this.bootstrap();
+        this.reloadHistory();
       }
     } catch (_) {
       // ignore
@@ -426,21 +533,90 @@ export class ChatController {
 
   private handleAgentEvent(payloadJson: string): void {
     try {
-      const payload = JSON.parse(payloadJson) as Record<string, string | Record<string, string>>;
+      const payload = JSON.parse(payloadJson) as Record<string, string | object | number | null>;
       const sessionKey = (payload['sessionKey'] as string)?.trim();
       if (sessionKey && sessionKey !== this._sessionKey) return;
-      const stream = payload['stream'] as string;
-      const data = payload['data'] as Record<string, string>;
+      const stream = String(payload['stream'] ?? '').trim();
+      const data = payload['data'] as Record<string, object | string | number | null> | undefined;
       if (stream === 'assistant' && data) {
-        const text = data['text'] as string;
-        if (text) {
-          this._streamingAssistantText = text;
+        const text = data['text'];
+        const textStr = typeof text === 'string' ? text : text !== undefined ? String(text) : '';
+        if (textStr.length > 0) {
+          this._streamingAssistantText = textStr;
           this.notify();
         }
+        return;
+      }
+      if (stream === 'tool' && data) {
+        const phase = String(data['phase'] ?? '').trim();
+        const name = String(data['name'] ?? '').trim();
+        const toolCallId = String(data['toolCallId'] ?? '').trim();
+        if (phase.length === 0 || name.length === 0 || toolCallId.length === 0) return;
+        const tsRaw = payload['ts'];
+        const ts = typeof tsRaw === 'number' && Number.isFinite(tsRaw) ? tsRaw : Date.now();
+        if (phase === 'start') {
+          const argsRaw = data['args'];
+          let args: Record<string, object | string | number | boolean | null> | null = null;
+          if (argsRaw !== null && argsRaw !== undefined && typeof argsRaw === 'object' && !Array.isArray(argsRaw)) {
+            args = argsRaw as Record<string, object | string | number | boolean | null>;
+          }
+          const row: ChatPendingToolCall = {
+            toolCallId: toolCallId,
+            name: name,
+            args: args,
+            startedAtMs: ts,
+            isError: null,
+          };
+          this.pendingToolCallsById.set(toolCallId, row);
+          this.publishPendingToolCalls();
+          this.notify();
+        } else if (phase === 'result') {
+          this.pendingToolCallsById.delete(toolCallId);
+          this.publishPendingToolCalls();
+          this.notify();
+        }
+        return;
+      }
+      if (stream === 'error') {
+        this._errorText = 'Event stream interrupted; try refreshing.';
+        this.clearPendingRuns();
+        this.clearPendingTools();
+        this._streamingAssistantText = null;
+        this.notify();
       }
     } catch (_) {
       // ignore
     }
+  }
+
+  private reloadHistory(): void {
+    const key = this._sessionKey;
+    const histRec: Record<string, string> = { 'sessionKey': key };
+    void this.session
+      .request('chat.history', histRec, 15000)
+      .then((res) => {
+        if (!res.ok || !res.payloadJson) return;
+        const history = this.parseHistory(res.payloadJson, key);
+        this._messages = history.messages;
+        const tl = history.thinkingLevel?.trim();
+        if (tl && tl.length > 0) {
+          this._thinkingLevel = normalizeThinking(tl);
+        }
+        this.notify();
+      })
+      .catch(() => {});
+  }
+
+  private clearPendingTools(): void {
+    this.pendingToolCallsById.clear();
+    this._pendingToolCalls = [];
+  }
+
+  private publishPendingToolCalls(): void {
+    const arr: ChatPendingToolCall[] = [];
+    this.pendingToolCallsById.forEach((v) => arr.push(v));
+    arr.sort((a, b) => a.startedAtMs - b.startedAtMs);
+    this._pendingToolCalls = arr;
   }
 
   private clearPendingRuns(): void {

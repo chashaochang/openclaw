@@ -21,3 +21,21 @@ export interface ChatSessionEntry {
   updatedAtMs?: number;
   displayName?: string;
 }
+
+/** Local image queued in the composer before send (Android PendingImageAttachment). */
+export interface ChatPendingAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  base64: string;
+}
+
+/** In-flight tool call from gateway agent stream (Android ChatPendingToolCall). */
+export interface ChatPendingToolCall {
+  toolCallId: string;
+  name: string;
+  /** Raw args object from gateway; UI may show name only. */
+  args: Record<string, object | string | number | boolean | null> | null;
+  startedAtMs: number;
+  isError: boolean | null;
+}

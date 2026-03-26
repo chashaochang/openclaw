@@ -20,6 +20,18 @@ export struct ConnectTabScreen {
   @Prop remoteAddress: string;
   @StorageLink('nodeRuntime') nodeRuntime: NodeRuntime = AppStorage.get<NodeRuntime>('nodeRuntime') as NodeRuntime;
 
+  private resStr(res: Resource): string {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return '';
+    }
+    try {
+      return ctx.resourceManager.getStringSync(res);
+    } catch {
+      return '';
+    }
+  }
+
   @State inputMode: 'setupCode' | 'manual' = 'setupCode';
   @State setupCodeInput: string = '';
   @State hostInput: string = '10.0.2.2';
@@ -81,7 +93,7 @@ export struct ConnectTabScreen {
     try {
       const result = await scanBarcode.startScanForResult(ctx, options);
       const raw = result?.originalValue?.trim();
-      const invalidMsg = 'Invalid setup code';
+      const invalidMsg = this.resStr($r('app.string.connect_qr_error_invalid')) || 'Invalid setup code';
       if (!raw) {
         this.validationText = invalidMsg;
         return;
@@ -126,16 +138,20 @@ export struct ConnectTabScreen {
     this.connecting = true;
     this.validationText = '';
     try {
+      if (this.inputMode === 'setupCode' && this.setupCodeInput.trim().length === 0) {
+        this.validationText = this.resStr($r('app.string.connect_validation_setup_code')) || 'Paste a valid setup code to connect.';
+        return;
+      }
       const useSetupCode = this.inputMode === 'setupCode' && this.setupCodeInput.trim().length > 0;
       if (useSetupCode) {
         const decoded = decodeGatewaySetupCode(this.setupCodeInput.trim());
         if (!decoded) {
-          this.validationText = 'Paste a valid setup code to connect.';
+          this.validationText = this.resStr($r('app.string.connect_validation_setup_code')) || 'Paste a valid setup code to connect.';
           return;
         }
         const endpoint = parseGatewayEndpoint(decoded.url);
         if (!endpoint) {
-          this.validationText = 'Invalid gateway URL in setup code';
+          this.validationText = this.resStr($r('app.string.connect_invalid_gateway_url_in_setup')) || 'Invalid gateway URL in setup code';
           return;
         }
         await this.nodeRuntime.saveManualConfig(
@@ -156,7 +172,7 @@ export struct ConnectTabScreen {
         const host = this.hostInput.trim();
         const port = parseInt(this.portInput, 10) || 18789;
         if (host.length === 0) {
-          this.validationText = 'Paste a valid setup code to connect.';
+          this.validationText = this.resStr($r('app.string.connect_validation_manual_host_port')) || 'Enter a valid manual host and port to connect.';
           return;
         }
         await this.nodeRuntime.saveManualConfig(
@@ -193,7 +209,7 @@ export struct ConnectTabScreen {
             .fontSize(18)
             .fontWeight(FontWeight.Medium)
             .fontColor('#17181C')
-          Text($r('app.string.connect_heading_subtitle'))
+          Text(this.isConnected ? $r('app.string.connect_heading_subtitle_connected') : $r('app.string.connect_heading_subtitle_disconnected'))
             .fontSize(14)
             .fontColor('#4D5563')
         }
@@ -205,7 +221,7 @@ export struct ConnectTabScreen {
             .fontSize(12)
             .fontWeight(FontWeight.Medium)
             .fontColor('#4D5563')
-          Text(this.activeEndpoint() || 'Not set')
+          Text(this.activeEndpoint() || this.resStr($r('app.string.connect_not_set')) || 'Not set')
             .fontSize(14)
             .fontFamily('monospace')
             .fontColor('#17181C')
@@ -245,6 +261,14 @@ export struct ConnectTabScreen {
             if (this.isConnected) {
               this.nodeRuntime.disconnect();
               this.validationText = '';
+              return;
+            }
+            if (this.statusText.toLowerCase().includes('operator offline')) {
+              this.validationText = '';
+              this.connecting = true;
+              this.nodeRuntime.refreshGatewayConnection().finally(() => {
+                this.connecting = false;
+              });
               return;
             }
             this.doConnect();

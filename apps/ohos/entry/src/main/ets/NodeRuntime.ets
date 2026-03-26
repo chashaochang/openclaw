@@ -5,6 +5,8 @@ import { common } from "@kit.AbilityKit";
 import { deviceInfo } from "@kit.BasicServicesKit";
 import {
   OpenClawCapability,
+  OpenClawCanvasA2UICommand,
+  OpenClawCanvasCommand,
   OpenClawDeviceCommand,
   OpenClawSystemCommand,
 } from "./protocol/OpenClawProtocol";
@@ -17,9 +19,33 @@ import { ChatController } from "./chat/ChatController";
 import { DeviceHandler } from "./node/DeviceHandler";
 import { SystemHandler } from "./node/SystemHandler";
 import { InvokeDispatcher } from "./node/InvokeDispatcher";
+import { CanvasWebHost, OpenClawCanvasA2UIBridge } from "./canvas/CanvasWebHost";
+import { CanvasInvokeHandler } from "./canvas/CanvasInvokeHandler";
+import { isTrustedCanvasActionUrl } from "./canvas/CanvasActionTrust";
+import {
+  extractActionName,
+  formatAgentMessage,
+  jsDispatchA2UIActionStatus,
+  type A2UIUserActionMap,
+} from "./canvas/OpenClawCanvasA2UIAction";
+import { VoiceCoordinator, type VoiceStateListener } from "./voice/VoiceCoordinator";
 
 const CLIENT_ID = "openclaw-android";
 const VERSION = "1.0.0";
+
+interface HomeCanvasPayloadShape {
+  gatewayState: string;
+  eyebrow: string;
+  title: string;
+  subtitle: string;
+  gatewayLabel: string;
+  activeAgentName: string;
+  activeAgentBadge: string;
+  activeAgentCaption: string;
+  agentCount: number;
+  agents: object[];
+  footer: string;
+}
 
 export type StatusListener = (status: NodeStatus) => void;
 
@@ -43,16 +69,182 @@ export class NodeRuntime {
   private _remoteAddress = "";
   private _onboardingCompleted = false;
   private _onboardingListener: ((completed: boolean) => void) | null = null;
+  private canvasWebHost: CanvasWebHost = new CanvasWebHost();
+  private a2uiBridge: OpenClawCanvasA2UIBridge;
+  private voiceCoordinator: VoiceCoordinator;
 
   constructor(context: common.UIAbilityContext) {
     this.context = context;
     this.prefs = new SecurePrefs(context);
     this.identityStore = new DeviceIdentityStore(context);
     this.deviceAuthStore = new DeviceAuthStore(this.prefs);
+    this.voiceCoordinator = new VoiceCoordinator(this.prefs, () => this.chatController, () => this._isConnected);
+    this.a2uiBridge = new OpenClawCanvasA2UIBridge((payload: string) => {
+      void this.handleCanvasA2UIActionFromWebView(payload);
+    });
     this.prefs.getBoolean("onboarding.completed").then((v) => {
       this._onboardingCompleted = v;
       this._onboardingListener?.(v);
     });
+  }
+
+  getCanvasWebHost(): CanvasWebHost {
+    return this.canvasWebHost;
+  }
+
+  getCanvasA2UIBridge(): OpenClawCanvasA2UIBridge {
+    return this.a2uiBridge;
+  }
+
+  private makeCanvasInvokeHandler(): CanvasInvokeHandler {
+    return new CanvasInvokeHandler({
+      canvas: this.canvasWebHost,
+      getNodeCanvasHost: () => this.nodeSession?.getCanvasHostUrl() ?? null,
+      getOperatorCanvasHost: () => this.operatorSession?.getCanvasHostUrl() ?? null,
+      refreshNodeCanvasCapability: () => {
+        const s = this.nodeSession;
+        return s ? s.refreshNodeCanvasCapability() : Promise.resolve(false);
+      },
+      onA2uiPush: () => {},
+      onA2uiReset: () => {},
+    });
+  }
+
+  private resolveMainSessionKey(): string {
+    const k = (this.operatorSession?.getMainSessionKey() ?? "").trim();
+    return k.length > 0 ? k : "main";
+  }
+
+  private resolveA2uiHostUrl(): string | null {
+    const nodeRaw = (this.nodeSession?.getCanvasHostUrl() ?? "").trim();
+    const opRaw = (this.operatorSession?.getCanvasHostUrl() ?? "").trim();
+    const raw = nodeRaw.length > 0 ? nodeRaw : opRaw;
+    if (raw.length === 0) {
+      return null;
+    }
+    return `${raw.replace(/\/+$/, "")}/__openclaw__/a2ui/?platform=harmony`;
+  }
+
+  private buildHomeCanvasPayloadJson(): string {
+    let gatewayState: string;
+    if (this._isConnected) {
+      gatewayState = "connected";
+    } else {
+      const s = this._statusText.toLowerCase();
+      if (s.includes("connecting") || s.includes("reconnecting")) {
+        gatewayState = "connecting";
+      } else if (s.includes("error") || s.includes("failed")) {
+        gatewayState = "error";
+      } else {
+        gatewayState = "offline";
+      }
+    }
+    const agents: object[] = [];
+    const payload: HomeCanvasPayloadShape = {
+      gatewayState,
+      eyebrow: "OpenClaw",
+      title: "Your phone stays quiet until it is needed",
+      subtitle: "",
+      gatewayLabel: "Gateway",
+      activeAgentName: "Main",
+      activeAgentBadge: "OC",
+      activeAgentCaption: this._isConnected ? "Connected" : this._statusText,
+      agentCount: 0,
+      agents,
+      footer: "",
+    };
+    return JSON.stringify(payload);
+  }
+
+  private updateHomeCanvasState(): void {
+    this.canvasWebHost.setHomeStateJson(this.buildHomeCanvasPayloadJson());
+  }
+
+  async refreshHomeCanvasOverviewIfConnected(): Promise<void> {
+    if (!this._isConnected) {
+      return;
+    }
+    this.updateHomeCanvasState();
+  }
+
+  private randomActionId(): string {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+      const r = Math.random() * 16 | 0;
+      const v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  async handleCanvasA2UIActionFromWebView(payloadJson: string): Promise<void> {
+    const trimmed = payloadJson.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+    let root: Record<string, object | string | number | boolean | null>;
+    try {
+      root = JSON.parse(trimmed) as Record<string, object | string | number | boolean | null>;
+    } catch {
+      return;
+    }
+    const userActionRaw = root["userAction"];
+    const userActionObj: A2UIUserActionMap =
+      typeof userActionRaw === "object" && userActionRaw !== null
+        ? (userActionRaw as A2UIUserActionMap)
+        : (root as A2UIUserActionMap);
+    let actionId = String(userActionObj["id"] ?? "").trim();
+    if (actionId.length === 0) {
+      actionId = this.randomActionId();
+    }
+    const name = extractActionName(userActionObj);
+    if (!name) {
+      return;
+    }
+    const trustedBase = this.resolveA2uiHostUrl();
+    const current = this.canvasWebHost.getCurrentUrl();
+    const trustedList = trustedBase ? [trustedBase] : [];
+    if (!isTrustedCanvasActionUrl(current, trustedList)) {
+      return;
+    }
+    const surfaceId = String(userActionObj["surfaceId"] ?? "").trim() || "main";
+    const sourceComponentId = String(userActionObj["sourceComponentId"] ?? "").trim() || "-";
+    const ctxRaw = userActionObj["context"];
+    const contextJson =
+      typeof ctxRaw === "object" && ctxRaw !== null ? JSON.stringify(ctxRaw) : null;
+    const sessionKey = this.resolveMainSessionKey();
+    const displayName = await this.getDisplayName();
+    const instanceId = (await this.getInstanceId()).toLowerCase();
+    const message = formatAgentMessage(
+      name,
+      sessionKey,
+      surfaceId,
+      sourceComponentId,
+      displayName,
+      instanceId,
+      contextJson,
+    );
+    const node = this.nodeSession;
+    let error: string | null = null;
+    if (node) {
+      const payload = JSON.stringify({
+        message,
+        sessionKey,
+        thinking: "low",
+        deliver: false,
+        key: actionId,
+      });
+      const sent = await node.sendNodeEvent("agent.request", payload);
+      if (!sent) {
+        error = "send failed";
+      }
+    } else {
+      error = "gateway not connected";
+    }
+    const statusJs = jsDispatchA2UIActionStatus(actionId, error === null, error);
+    try {
+      await this.canvasWebHost.runJavaScript(statusJs);
+    } catch {
+      // ignore
+    }
   }
 
   setOnboardingListener(listener: ((completed: boolean) => void) | null): void {
@@ -77,11 +269,62 @@ export class NodeRuntime {
   }
 
   private notifyStatus(): void {
+    this.voiceCoordinator.onGatewayConnectionChanged(this._isConnected);
     this.statusListener?.({
       statusText: this._statusText,
       isConnected: this._isConnected,
       remoteAddress: this._remoteAddress,
     });
+    this.updateHomeCanvasState();
+    void this.syncCanvasDebugOverlay();
+  }
+
+  private syncCanvasDebugOverlay(): void {
+    void this.prefs.getBooleanOr("canvas.debug.enabled", false).then((en) => {
+      if (en) {
+        const sub = this._remoteAddress.trim().length > 0 ? this._remoteAddress : null;
+        this.canvasWebHost.setDebugStatus(true, this._statusText, sub);
+      } else {
+        this.canvasWebHost.setDebugStatus(false, null, null);
+      }
+    });
+  }
+
+  async getCanvasDebugEnabled(): Promise<boolean> {
+    return this.prefs.getBooleanOr("canvas.debug.enabled", false);
+  }
+
+  async setCanvasDebugEnabled(enabled: boolean): Promise<void> {
+    await this.prefs.putBoolean("canvas.debug.enabled", enabled);
+    this.syncCanvasDebugOverlay();
+  }
+
+  setVoiceUiListener(listener: VoiceStateListener | null): void {
+    this.voiceCoordinator.setUiListener(listener);
+  }
+
+  async setVoiceMicEnabled(enabled: boolean): Promise<void> {
+    await this.voiceCoordinator.setMicEnabled(enabled);
+  }
+
+  async setVoiceSpeakerEnabled(enabled: boolean): Promise<void> {
+    await this.voiceCoordinator.setSpeakerEnabled(enabled);
+  }
+
+  getVoiceSpeakerEnabled(): boolean {
+    return this.voiceCoordinator.getSpeakerEnabled();
+  }
+
+  setVoiceScreenActive(active: boolean): void {
+    this.voiceCoordinator.setVoiceScreenActive(active);
+  }
+
+  getVoiceMicEnabled(): boolean {
+    return this.voiceCoordinator.getMicEnabled();
+  }
+
+  getVoiceMicCooldown(): boolean {
+    return this.voiceCoordinator.getMicCooldown();
   }
 
   getStatusText(): string {
@@ -165,6 +408,7 @@ export class NodeRuntime {
           this._statusText = "Connected";
           this._isConnected = true;
           this._remoteAddress = remoteAddress;
+          this.canvasWebHost.navigate("");
           this.notifyStatus();
           if (mainSessionKey) {
             this.chatController?.applyMainSessionKey(mainSessionKey);
@@ -175,6 +419,7 @@ export class NodeRuntime {
       (message) => {
         this._statusText = message;
         this._isConnected = false;
+        this.canvasWebHost.navigate("");
         this.notifyStatus();
         this.chatController?.onDisconnected(message);
         const node = this.nodeSession;
@@ -183,6 +428,7 @@ export class NodeRuntime {
       },
       (event, payloadJson) => {
         this.chatController?.handleGatewayEvent(event, payloadJson);
+        this.voiceCoordinator.handleGatewayEvent(event, payloadJson);
       },
       null,
       null,
@@ -197,6 +443,7 @@ export class NodeRuntime {
           this._statusText = "Connected";
           this._isConnected = true;
           this._remoteAddress = remoteAddress;
+          this.canvasWebHost.navigate("");
           this.notifyStatus();
           if (mainSessionKey) {
             this.chatController?.applyMainSessionKey(mainSessionKey);
@@ -207,6 +454,7 @@ export class NodeRuntime {
       (message) => {
         this._statusText = message;
         this._isConnected = false;
+        this.canvasWebHost.navigate("");
         this.notifyStatus();
         this.chatController?.onDisconnected(message);
         const op = this.operatorSession;
@@ -215,7 +463,11 @@ export class NodeRuntime {
       },
       () => {},
       async (req) => {
-        const dispatcher = new InvokeDispatcher(new DeviceHandler(), new SystemHandler());
+        const dispatcher = new InvokeDispatcher(
+          new DeviceHandler(this.context),
+          new SystemHandler(),
+          this.makeCanvasInvokeHandler(),
+        );
         return dispatcher.handleInvoke(req);
       },
       null,
@@ -236,6 +488,7 @@ export class NodeRuntime {
       const msg = err instanceof Error ? err.message : String(err);
       this._statusText = msg.startsWith("Gateway ") ? msg : `Gateway error: ${msg}`;
       this._isConnected = false;
+      this.canvasWebHost.navigate("");
       this.notifyStatus();
       const op = this.operatorSession;
       const node = this.nodeSession;
@@ -269,13 +522,25 @@ export class NodeRuntime {
   }
 
   private async buildNodeConnectOptions(): Promise<GatewayConnectOptions> {
-    const caps: string[] = [OpenClawCapability.Device, OpenClawCapability.System];
+    const caps: string[] = [
+      OpenClawCapability.Device,
+      OpenClawCapability.System,
+      OpenClawCapability.Canvas,
+    ];
     const commands: string[] = [
       OpenClawDeviceCommand.Status,
       OpenClawDeviceCommand.Info,
       OpenClawDeviceCommand.Permissions,
       OpenClawDeviceCommand.Health,
       OpenClawSystemCommand.Notify,
+      OpenClawCanvasCommand.Present,
+      OpenClawCanvasCommand.Hide,
+      OpenClawCanvasCommand.Navigate,
+      OpenClawCanvasCommand.Eval,
+      OpenClawCanvasCommand.Snapshot,
+      OpenClawCanvasA2UICommand.Push,
+      OpenClawCanvasA2UICommand.PushJSONL,
+      OpenClawCanvasA2UICommand.Reset,
     ];
     return {
       role: "node",
@@ -300,7 +565,35 @@ export class NodeRuntime {
     };
   }
 
+  async refreshGatewayConnection(): Promise<void> {
+    const host = await this.getManualHost();
+    const portStr = await this.getManualPort();
+    const port = parseInt(portStr, 10) || 18789;
+    const useTls = await this.getManualTls();
+    const token = await this.getGatewayToken();
+    const password = await this.getGatewayPassword();
+    if (!host || host.trim().length === 0) {
+      this._statusText = "Failed: no cached gateway endpoint";
+      this.notifyStatus();
+      return;
+    }
+    await this.connect(host.trim(), port, useTls, token, password);
+  }
+
+  /**
+   * HarmonyOS may tear down WebSockets when the app backgrounds; reconnect when returning to foreground.
+   * Only runs if the user had a successful manual gateway connection (see connect() -> setManualEnabled(true)).
+   */
+  async reconnectGatewayOnForeground(): Promise<void> {
+    const enabled = await this.getManualEnabled();
+    if (!enabled) {
+      return;
+    }
+    await this.refreshGatewayConnection();
+  }
+
   disconnect(): void {
+    void this.voiceCoordinator.prepareDisconnect();
     if (this.operatorSession) {
       this.operatorSession.disconnect();
       this.operatorSession = null;
@@ -313,6 +606,7 @@ export class NodeRuntime {
     this._statusText = "Offline";
     this._isConnected = false;
     this._remoteAddress = "";
+    this.canvasWebHost.navigate("");
     this.notifyStatus();
   }
 

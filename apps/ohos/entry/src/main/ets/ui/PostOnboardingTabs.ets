@@ -1,11 +1,15 @@
 /**
- * Tab container: Connect, Chat, Settings.
- * Matches Android: top status chip, custom bottom tab bar with rounded top corners.
+ * Tab container: Connect, Chat, Voice, Screen, Settings.
+ * Matches Android PostOnboardingTabs tab order and chrome.
  */
 import { NodeRuntime } from '../NodeRuntime';
 import { ConnectTabScreen } from './ConnectTabScreen';
+import { ChatSessionListScreen } from './ChatSessionListScreen';
 import { ChatTabScreen } from './ChatTabScreen';
+import { VoiceTabScreen } from './VoiceTabScreen';
+import { ScreenTabScreen } from './ScreenTabScreen';
 import { SettingsTabScreen } from './SettingsTabScreen';
+import { HMRouter } from '@hadss/hmrouter';
 
 interface StatusChipColors {
   bg: string;
@@ -13,6 +17,9 @@ interface StatusChipColors {
   text: string;
 }
 
+@HMRouter({
+  pageUrl: 'PostOnboardingTabs',
+})
 @Component
 export struct PostOnboardingTabs {
   @StorageLink('nodeRuntime') nodeRuntime: NodeRuntime = AppStorage.get<NodeRuntime>('nodeRuntime') as NodeRuntime;
@@ -32,6 +39,9 @@ export struct PostOnboardingTabs {
     this.statusText = this.nodeRuntime.getStatusText();
     this.isConnected = this.nodeRuntime.getIsConnected();
     this.remoteAddress = this.nodeRuntime.getRemoteAddress();
+    if (this.activeTab === 2) {
+      this.nodeRuntime.setVoiceScreenActive(true);
+    }
   }
 
   private statusChipColor(): StatusChipColors {
@@ -60,12 +70,14 @@ export struct PostOnboardingTabs {
   TabItem(label: ResourceStr, iconRes: Resource, index: number) {
     Column({ space: 4 }) {
       SymbolGlyph(iconRes)
-        .fontSize(24)
+        .fontSize(22)
         .fontColor([this.activeTab === index ? '#1D5DD8' : '#8A92A2'])
       Text(label)
-        .fontSize(12)
+        .fontSize(11)
         .fontWeight(this.activeTab === index ? FontWeight.Bold : FontWeight.Medium)
         .fontColor(this.activeTab === index ? '#1D5DD8' : '#4D5563')
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .layoutWeight(1)
     .height(52)
@@ -74,7 +86,17 @@ export struct PostOnboardingTabs {
     .borderRadius(16)
     .border(this.activeTab === index ? { width: 1, color: '#D5E2FA' } : { width: 0, color: '#00000000' })
     .onClick(() => {
+      const prev = this.activeTab;
       this.activeTab = index;
+      if (prev === 2) {
+        this.nodeRuntime.setVoiceScreenActive(false);
+      }
+      if (index === 2) {
+        this.nodeRuntime.setVoiceScreenActive(true);
+      }
+      if (index === 3) {
+        void this.nodeRuntime.refreshHomeCanvasOverviewIfConnected();
+      }
     })
   }
 
@@ -117,9 +139,20 @@ export struct PostOnboardingTabs {
           })
         }
         if (this.activeTab === 1) {
-          ChatTabScreen({ isConnected: this.isConnected })
+          ChatSessionListScreen({
+            isConnected: this.isConnected,
+          })
         }
         if (this.activeTab === 2) {
+          VoiceTabScreen({ statusText: this.statusText })
+        }
+        if (this.activeTab === 3) {
+          ScreenTabScreen({
+            isConnected: this.isConnected,
+            statusText: this.statusText,
+          })
+        }
+        if (this.activeTab === 4) {
           SettingsTabScreen()
         }
       }
@@ -130,7 +163,9 @@ export struct PostOnboardingTabs {
       Row({ space: 6 }) {
         this.TabItem($r('app.string.tab_connect'), $r('sys.symbol.checkmark_circle_fill'), 0)
         this.TabItem($r('app.string.tab_chat'), $r('sys.symbol.message_on_message_fill'), 1)
-        this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape_fill'), 2)
+        this.TabItem($r('app.string.tab_voice'), $r('sys.symbol.mic_fill'), 2)
+        this.TabItem($r('app.string.tab_screen'), $r('sys.symbol.screen_share_fill'), 3)
+        this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape_fill'), 4)
       }
       .width('100%')
       .padding({ left: 10, right: 10, top: 10, bottom: 10 })

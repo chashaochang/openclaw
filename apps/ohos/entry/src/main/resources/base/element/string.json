@@ -21,6 +21,14 @@
       "value": "Scan gateway pairing QR code"
     },
     {
+      "name": "permission_microphone_reason",
+      "value": "Transcribe your voice to send to the gateway"
+    },
+    {
+      "name": "permission_location_reason",
+      "value": "Allow location access for gateway discovery and location tools"
+    },
+    {
       "name": "connect_scan_qr",
       "value": "Scan QR Code"
     },
@@ -57,8 +65,72 @@
       "value": "Chat"
     },
     {
+      "name": "tab_voice",
+      "value": "Voice"
+    },
+    {
+      "name": "tab_screen",
+      "value": "Screen"
+    },
+    {
       "name": "tab_settings",
       "value": "Settings"
+    },
+    {
+      "name": "voice_hint_tap_mic",
+      "value": "Tap the mic to start"
+    },
+    {
+      "name": "voice_hint_each_pause_sends_turn",
+      "value": "Each pause sends a turn automatically."
+    },
+    {
+      "name": "voice_hint_mic_stop_send",
+      "value": "Tap the mic again to stop listening and send your message."
+    },
+    {
+      "name": "voice_state_mic_off",
+      "value": "Mic off"
+    },
+    {
+      "name": "voice_bubble_you",
+      "value": "You"
+    },
+    {
+      "name": "voice_bubble_assistant",
+      "value": "OpenClaw"
+    },
+    {
+      "name": "voice_listening_response",
+      "value": "Listening for response…"
+    },
+    {
+      "name": "voice_speaker_on",
+      "value": "Speaker"
+    },
+    {
+      "name": "voice_speaker_muted",
+      "value": "Muted"
+    },
+    {
+      "name": "voice_mic_permission_rationale",
+      "value": "Microphone access is required for voice mode."
+    },
+    {
+      "name": "voice_open_settings",
+      "value": "Open settings"
+    },
+    {
+      "name": "screen_tab_offline_hint",
+      "value": "Connect to the gateway to use the operator screen."
+    },
+    {
+      "name": "screen_tab_ohos_stub_title",
+      "value": "Canvas not available yet"
+    },
+    {
+      "name": "screen_tab_ohos_stub_body",
+      "value": "The operator canvas needs WebView integration on this platform. When connected, use Chat for full control until this ships."
     },
     {
       "name": "status_connected",
@@ -141,6 +213,14 @@
       "value": "One primary action. Open advanced controls only when needed."
     },
     {
+      "name": "connect_heading_subtitle_connected",
+      "value": "Your gateway is active and ready."
+    },
+    {
+      "name": "connect_heading_subtitle_disconnected",
+      "value": "Connect to your gateway to get started."
+    },
+    {
       "name": "connect_active_endpoint",
       "value": "Active endpoint"
     },
@@ -205,6 +285,26 @@
       "value": "Localhost"
     },
     {
+      "name": "chat_session_label",
+      "value": "SESSION"
+    },
+    {
+      "name": "chat_back",
+      "value": "Back"
+    },
+    {
+      "name": "chat_sessions_empty",
+      "value": "No sessions yet"
+    },
+    {
+      "name": "chat_message_label",
+      "value": "MESSAGE"
+    },
+    {
+      "name": "chat_select_thinking_level",
+      "value": "Select thinking level"
+    },
+    {
       "name": "chat_empty_state",
       "value": "Connect to gateway to chat"
     },
@@ -265,6 +365,34 @@
       "value": "High"
     },
     {
+      "name": "chat_stream_live",
+      "value": "ASSISTANT · LIVE"
+    },
+    {
+      "name": "chat_tools_label",
+      "value": "TOOLS"
+    },
+    {
+      "name": "chat_tools_running",
+      "value": "Running tools…"
+    },
+    {
+      "name": "chat_attachment_image",
+      "value": "Image"
+    },
+    {
+      "name": "chat_attach",
+      "value": "Attach"
+    },
+    {
+      "name": "chat_attach_limit",
+      "value": "You can attach up to 8 images."
+    },
+    {
+      "name": "chat_attach_failed",
+      "value": "Could not add images."
+    },
+    {
       "name": "settings_section_settings",
       "value": "SETTINGS"
     },
@@ -313,8 +441,172 @@
       "value": "Version"
     },
     {
+      "name": "settings_section_gateway",
+      "value": "GATEWAY"
+    },
+    {
+      "name": "settings_gateway_refresh",
+      "value": "Refresh connection"
+    },
+    {
+      "name": "settings_gateway_refresh_busy",
+      "value": "Refreshing…"
+    },
+    {
+      "name": "settings_gateway_endpoint_label",
+      "value": "Saved endpoint"
+    },
+    {
+      "name": "settings_gateway_manual_hint",
+      "value": "Manual gateway host and port from Connect. Refresh reuses saved credentials."
+    },
+    {
+      "name": "settings_tls_badge",
+      "value": "TLS"
+    },
+    {
+      "name": "settings_tcp_badge",
+      "value": "TCP"
+    },
+    {
+      "name": "settings_section_features",
+      "value": "FEATURES"
+    },
+    {
+      "name": "settings_voice_speaker_default",
+      "value": "Voice speaker"
+    },
+    {
+      "name": "settings_voice_speaker_subtitle",
+      "value": "Speak assistant replies on the Voice tab when audio is available."
+    },
+    {
+      "name": "settings_canvas_debug",
+      "value": "Canvas debug overlay"
+    },
+    {
+      "name": "settings_canvas_debug_subtitle",
+      "value": "Show gateway status on the Screen (canvas) tab for troubleshooting."
+    },
+    {
+      "name": "settings_section_permissions",
+      "value": "PERMISSIONS"
+    },
+    {
+      "name": "settings_permission_microphone",
+      "value": "Microphone"
+    },
+    {
+      "name": "settings_permission_microphone_sub",
+      "value": "Required for Voice transcription."
+    },
+    {
+      "name": "settings_permission_camera",
+      "value": "Camera"
+    },
+    {
+      "name": "settings_permission_camera_sub",
+      "value": "Required to scan gateway QR codes."
+    },
+    {
+      "name": "settings_permission_location",
+      "value": "Location"
+    },
+    {
+      "name": "settings_permission_location_sub",
+      "value": "Used by location tools and nearby gateway discovery."
+    },
+    {
+      "name": "settings_permission_notifications",
+      "value": "Notifications"
+    },
+    {
+      "name": "settings_permission_notifications_sub",
+      "value": "Allow OpenClaw to post local notifications."
+    },
+    {
+      "name": "settings_permission_notification_listener",
+      "value": "Notification listener"
+    },
+    {
+      "name": "settings_permission_notification_listener_sub",
+      "value": "Read third-party notifications for automation."
+    },
+    {
+      "name": "settings_permission_photos",
+      "value": "Photos"
+    },
+    {
+      "name": "settings_permission_photos_sub",
+      "value": "Read images from your library."
+    },
+    {
+      "name": "settings_permission_contacts",
+      "value": "Contacts"
+    },
+    {
+      "name": "settings_permission_contacts_sub",
+      "value": "Read contacts for messaging tools."
+    },
+    {
+      "name": "settings_permission_calendar",
+      "value": "Calendar"
+    },
+    {
+      "name": "settings_permission_calendar_sub",
+      "value": "Read and write calendar events."
+    },
+    {
+      "name": "settings_permission_motion",
+      "value": "Motion"
+    },
+    {
+      "name": "settings_permission_motion_sub",
+      "value": "Activity recognition for automation."
+    },
+    {
+      "name": "settings_permission_sms",
+      "value": "SMS"
+    },
+    {
+      "name": "settings_permission_sms_sub",
+      "value": "Send and read SMS messages."
+    },
+    {
+      "name": "settings_permission_call_log",
+      "value": "Call log"
+    },
+    {
+      "name": "settings_permission_call_log_sub",
+      "value": "Read recent call history."
+    },
+    {
+      "name": "settings_permission_unavailable_platform",
+      "value": "Unavailable on this platform"
+    },
+    {
+      "name": "settings_permission_granted",
+      "value": "Granted"
+    },
+    {
+      "name": "settings_permission_grant",
+      "value": "Grant"
+    },
+    {
+      "name": "settings_permission_manage",
+      "value": "Manage"
+    },
+    {
+      "name": "settings_platform_harmony",
+      "value": "OpenHarmony node"
+    },
+    {
+      "name": "settings_refresh_failed",
+      "value": "Could not refresh. Check the Connect tab."
+    },
+    {
       "name": "onboarding_first_run_kicker",
-      "value": "First run"
+      "value": "FIRST RUN"
     },
     {
       "name": "onboarding_title_mobile_setup",
@@ -369,8 +661,44 @@
       "value": "Scan onboarding QR"
     },
     {
+      "name": "onboarding_gateway_qr_primary_hint",
+      "value": "Run `openclaw qr` on your gateway host, then scan the code with this device."
+    },
+    {
+      "name": "onboarding_scan_failed",
+      "value": "Scan failed"
+    },
+    {
+      "name": "onboarding_error_scan_qr_first",
+      "value": "Scan QR first, or use advanced setup."
+    },
+    {
+      "name": "onboarding_error_setup_code_invalid_url",
+      "value": "Gateway URL in setup code is invalid."
+    },
+    {
+      "name": "onboarding_error_manual_invalid_endpoint",
+      "value": "Manual endpoint is invalid."
+    },
+    {
+      "name": "onboarding_error_invalid_gateway_url",
+      "value": "Gateway URL is invalid."
+    },
+    {
+      "name": "onboarding_perm_none_selected",
+      "value": "No permissions selected"
+    },
+    {
+      "name": "onboarding_qr_error_invalid_setup_code",
+      "value": "QR code did not contain a valid setup code."
+    },
+    {
+      "name": "connect_invalid_gateway_url_in_setup",
+      "value": "Invalid gateway URL in setup code"
+    },
+    {
       "name": "onboarding_run_on_gateway_host",
-      "value": "Run on the gateway host:"
+      "value": "Run these on the gateway host:"
     },
     {
       "name": "onboarding_then_scan_with_device",
@@ -478,7 +806,147 @@
     },
     {
       "name": "onboarding_permissions_intro",
-      "value": "Enable only the permissions you need. You can change these later in Settings."
+      "value": "Enable only what you need. You can change these anytime in Settings."
+    },
+    {
+      "name": "onboarding_welcome_card_gateway_title",
+      "value": "Connect to your gateway"
+    },
+    {
+      "name": "onboarding_welcome_card_gateway_subtitle",
+      "value": "Scan a QR code or enter your host manually"
+    },
+    {
+      "name": "onboarding_welcome_card_permissions_title",
+      "value": "Choose your permissions"
+    },
+    {
+      "name": "onboarding_welcome_card_permissions_subtitle",
+      "value": "Enable only what you need, change anytime"
+    },
+    {
+      "name": "onboarding_welcome_card_features_title",
+      "value": "Chat, voice, and screen"
+    },
+    {
+      "name": "onboarding_welcome_card_features_subtitle",
+      "value": "Full operator control from your phone"
+    },
+    {
+      "name": "onboarding_welcome_card_verify_title",
+      "value": "Verify your connection"
+    },
+    {
+      "name": "onboarding_welcome_card_verify_subtitle",
+      "value": "Live check before you enter the app"
+    },
+    {
+      "name": "onboarding_section_system",
+      "value": "System"
+    },
+    {
+      "name": "onboarding_section_media",
+      "value": "Media"
+    },
+    {
+      "name": "onboarding_section_personal_data",
+      "value": "Personal Data"
+    },
+    {
+      "name": "onboarding_perm_gateway_discovery_title",
+      "value": "Gateway discovery"
+    },
+    {
+      "name": "onboarding_perm_gateway_discovery_subtitle",
+      "value": "Find gateways on your local network"
+    },
+    {
+      "name": "onboarding_perm_location_title",
+      "value": "Location"
+    },
+    {
+      "name": "onboarding_perm_location_subtitle",
+      "value": "Share device location while app is open"
+    },
+    {
+      "name": "onboarding_perm_notifications_subtitle",
+      "value": "Alerts and foreground service notices"
+    },
+    {
+      "name": "onboarding_perm_notification_listener_title",
+      "value": "Notification listener"
+    },
+    {
+      "name": "onboarding_perm_notification_listener_subtitle",
+      "value": "Read and act on your notifications (configure in system settings)"
+    },
+    {
+      "name": "onboarding_perm_microphone_subtitle",
+      "value": "Voice transcription in the Voice tab"
+    },
+    {
+      "name": "onboarding_perm_camera_subtitle",
+      "value": "Take photos and short video clips"
+    },
+    {
+      "name": "onboarding_perm_photos_title",
+      "value": "Photos"
+    },
+    {
+      "name": "onboarding_perm_photos_subtitle",
+      "value": "Access your recent photos"
+    },
+    {
+      "name": "onboarding_perm_contacts_title",
+      "value": "Contacts"
+    },
+    {
+      "name": "onboarding_perm_contacts_subtitle",
+      "value": "Search and add contacts"
+    },
+    {
+      "name": "onboarding_perm_calendar_title",
+      "value": "Calendar"
+    },
+    {
+      "name": "onboarding_perm_calendar_subtitle",
+      "value": "Read and create calendar events"
+    },
+    {
+      "name": "onboarding_perm_motion_title",
+      "value": "Motion"
+    },
+    {
+      "name": "onboarding_perm_motion_subtitle",
+      "value": "Activity and step tracking"
+    },
+    {
+      "name": "onboarding_perm_unavailable_on_device",
+      "value": "Unavailable on this device"
+    },
+    {
+      "name": "onboarding_perm_sms_title",
+      "value": "SMS"
+    },
+    {
+      "name": "onboarding_perm_sms_subtitle",
+      "value": "Send and search text messages via the gateway"
+    },
+    {
+      "name": "onboarding_perm_call_log_title",
+      "value": "Call Log"
+    },
+    {
+      "name": "onboarding_perm_call_log_subtitle",
+      "value": "callLog.search"
+    },
+    {
+      "name": "onboarding_perm_granted",
+      "value": "Granted"
+    },
+    {
+      "name": "onboarding_perm_not_granted",
+      "value": "Not granted"
     },
     {
       "name": "onboarding_perm_camera_title",
@@ -517,8 +985,12 @@
       "value": "Enabled permissions"
     },
     {
+      "name": "onboarding_review_permissions_card_label",
+      "value": "Permissions"
+    },
+    {
       "name": "onboarding_review_connect_hint",
-      "value": "Tap Connect to verify gateway connectivity and auth."
+      "value": "Tap Connect to verify your gateway is reachable."
     },
     {
       "name": "onboarding_review_status_fmt",
@@ -530,7 +1002,43 @@
     },
     {
       "name": "onboarding_review_pairing_required_title",
-      "value": "Pairing required"
+      "value": "Pairing Required"
+    },
+    {
+      "name": "onboarding_connection_failed_title",
+      "value": "Connection Failed"
+    },
+    {
+      "name": "onboarding_pairing_failed_body",
+      "value": "Approve this phone on the gateway host, or copy the report below."
+    },
+    {
+      "name": "onboarding_connection_failed_body",
+      "value": "Copy this report and give it to your Claw."
+    },
+    {
+      "name": "onboarding_diagnostics_error_label",
+      "value": "Error"
+    },
+    {
+      "name": "onboarding_copy_report_button",
+      "value": "Copy Report for Claw"
+    },
+    {
+      "name": "onboarding_copy_report_toast",
+      "value": "Copied gateway diagnostics"
+    },
+    {
+      "name": "onboarding_review_connected_title",
+      "value": "Connected"
+    },
+    {
+      "name": "onboarding_review_gateway_fallback",
+      "value": "gateway"
+    },
+    {
+      "name": "onboarding_openclaw_harmonyos_diag_fmt",
+      "value": "OpenClaw HarmonyOS %1$s"
     },
     {
       "name": "onboarding_review_then_tap_connect_again",
@@ -538,7 +1046,7 @@
     },
     {
       "name": "onboarding_review_connected_to_fmt",
-      "value": "Connected to gateway"
+      "value": "Connected to %1$s"
     }
   ]
 }

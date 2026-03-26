@@ -45,6 +45,15 @@ export class SecurePrefs {
     return val === true;
   }
 
+  /** When the key is absent, returns [defaultValue] (plain [getBoolean] defaults missing keys to false). */
+  async getBooleanOr(key: string, defaultValue: boolean): Promise<boolean> {
+    const store = await this.ensureStore();
+    if (!store.hasSync(key)) {
+      return defaultValue;
+    }
+    return store.getSync(key, false) === true;
+  }
+
   async putBoolean(key: string, value: boolean): Promise<void> {
     const store = await this.ensureStore();
     store.putSync(key, value);

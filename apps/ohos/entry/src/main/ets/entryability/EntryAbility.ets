@@ -2,6 +2,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { NodeRuntime } from '../NodeRuntime';
+import { HMRouterMgr } from '@hadss/hmrouter';
 
 const DOMAIN = 0x0000;
 
@@ -12,6 +13,11 @@ export default class EntryAbility extends UIAbility {
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
+    // 日志开启需在init之前调用，否则会丢失初始化日志
+    HMRouterMgr.openLog("INFO")
+    HMRouterMgr.init({
+      context: this.context
+    })
     const runtime = new NodeRuntime(this.context);
     AppStorage.setOrCreate('nodeRuntime', runtime);
     AppStorage.setOrCreate('abilityContext', this.context);
@@ -43,6 +49,10 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
+    const runtime = AppStorage.get<NodeRuntime>('nodeRuntime');
+    if (runtime) {
+      void runtime.reconnectGatewayOnForeground();
+    }
   }
 
   onBackground(): void {

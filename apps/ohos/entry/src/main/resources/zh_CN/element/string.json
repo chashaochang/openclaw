@@ -21,6 +21,14 @@
       "value": "扫描网关配对二维码"
     },
     {
+      "name": "permission_microphone_reason",
+      "value": "将语音转写为文字并发送到网关"
+    },
+    {
+      "name": "permission_location_reason",
+      "value": "允许位置访问，用于网关发现与位置工具"
+    },
+    {
       "name": "connect_scan_qr",
       "value": "扫描二维码"
     },
@@ -57,8 +65,72 @@
       "value": "聊天"
     },
     {
+      "name": "tab_voice",
+      "value": "语音"
+    },
+    {
+      "name": "tab_screen",
+      "value": "屏幕"
+    },
+    {
       "name": "tab_settings",
       "value": "设置"
+    },
+    {
+      "name": "voice_hint_tap_mic",
+      "value": "点击麦克风开始"
+    },
+    {
+      "name": "voice_hint_each_pause_sends_turn",
+      "value": "每次停顿会自动发送一轮对话。"
+    },
+    {
+      "name": "voice_hint_mic_stop_send",
+      "value": "再次点击麦克风结束听取并发送你的话。"
+    },
+    {
+      "name": "voice_state_mic_off",
+      "value": "麦克风关闭"
+    },
+    {
+      "name": "voice_bubble_you",
+      "value": "你"
+    },
+    {
+      "name": "voice_bubble_assistant",
+      "value": "OpenClaw"
+    },
+    {
+      "name": "voice_listening_response",
+      "value": "正在等待回复…"
+    },
+    {
+      "name": "voice_speaker_on",
+      "value": "扬声器"
+    },
+    {
+      "name": "voice_speaker_muted",
+      "value": "已静音"
+    },
+    {
+      "name": "voice_mic_permission_rationale",
+      "value": "语音模式需要麦克风权限。"
+    },
+    {
+      "name": "voice_open_settings",
+      "value": "打开设置"
+    },
+    {
+      "name": "screen_tab_offline_hint",
+      "value": "请先连接网关以使用操作员屏幕。"
+    },
+    {
+      "name": "screen_tab_ohos_stub_title",
+      "value": "画布暂不可用"
+    },
+    {
+      "name": "screen_tab_ohos_stub_body",
+      "value": "操作员画布在本平台需要 WebView 等能力接入。已连接时请先使用「聊天」完成操作，后续版本会补齐。"
     },
     {
       "name": "status_connected",
@@ -137,6 +209,14 @@
       "value": "一个主要操作。仅在需要时打开高级选项。"
     },
     {
+      "name": "connect_heading_subtitle_connected",
+      "value": "网关已就绪。"
+    },
+    {
+      "name": "connect_heading_subtitle_disconnected",
+      "value": "连接网关以开始使用。"
+    },
+    {
       "name": "connect_active_endpoint",
       "value": "当前端点"
     },
@@ -205,6 +285,26 @@
       "value": "切换到安全 WebSocket (wss)。"
     },
     {
+      "name": "chat_session_label",
+      "value": "会话"
+    },
+    {
+      "name": "chat_back",
+      "value": "返回"
+    },
+    {
+      "name": "chat_sessions_empty",
+      "value": "暂无会话"
+    },
+    {
+      "name": "chat_message_label",
+      "value": "消息"
+    },
+    {
+      "name": "chat_select_thinking_level",
+      "value": "选择思考级别"
+    },
+    {
       "name": "chat_empty_state",
       "value": "连接网关后即可聊天"
     },
@@ -265,6 +365,34 @@
       "value": "高"
     },
     {
+      "name": "chat_stream_live",
+      "value": "助手 · 实时"
+    },
+    {
+      "name": "chat_tools_label",
+      "value": "工具"
+    },
+    {
+      "name": "chat_tools_running",
+      "value": "正在执行工具…"
+    },
+    {
+      "name": "chat_attachment_image",
+      "value": "图片"
+    },
+    {
+      "name": "chat_attach",
+      "value": "添加图片"
+    },
+    {
+      "name": "chat_attach_limit",
+      "value": "最多添加 8 张图片。"
+    },
+    {
+      "name": "chat_attach_failed",
+      "value": "无法添加图片。"
+    },
+    {
       "name": "settings_section_settings",
       "value": "设置"
     },
@@ -311,6 +439,170 @@
     {
       "name": "settings_version",
       "value": "版本"
+    },
+    {
+      "name": "settings_section_gateway",
+      "value": "网关"
+    },
+    {
+      "name": "settings_gateway_refresh",
+      "value": "刷新连接"
+    },
+    {
+      "name": "settings_gateway_refresh_busy",
+      "value": "正在刷新…"
+    },
+    {
+      "name": "settings_gateway_endpoint_label",
+      "value": "已保存地址"
+    },
+    {
+      "name": "settings_gateway_manual_hint",
+      "value": "主机与端口来自「连接」页的手动配置。刷新将使用已保存的凭据。"
+    },
+    {
+      "name": "settings_tls_badge",
+      "value": "TLS"
+    },
+    {
+      "name": "settings_tcp_badge",
+      "value": "TCP"
+    },
+    {
+      "name": "settings_section_features",
+      "value": "功能"
+    },
+    {
+      "name": "settings_voice_speaker_default",
+      "value": "语音扬声器"
+    },
+    {
+      "name": "settings_voice_speaker_subtitle",
+      "value": "在语音页播放助手回复（设备支持时）。"
+    },
+    {
+      "name": "settings_canvas_debug",
+      "value": "画布调试浮层"
+    },
+    {
+      "name": "settings_canvas_debug_subtitle",
+      "value": "在屏幕（画布）页显示网关状态，便于排查问题。"
+    },
+    {
+      "name": "settings_section_permissions",
+      "value": "权限"
+    },
+    {
+      "name": "settings_permission_microphone",
+      "value": "麦克风"
+    },
+    {
+      "name": "settings_permission_microphone_sub",
+      "value": "语音转写需要麦克风权限。"
+    },
+    {
+      "name": "settings_permission_camera",
+      "value": "相机"
+    },
+    {
+      "name": "settings_permission_camera_sub",
+      "value": "扫描网关二维码需要相机权限。"
+    },
+    {
+      "name": "settings_permission_location",
+      "value": "位置"
+    },
+    {
+      "name": "settings_permission_location_sub",
+      "value": "用于位置工具与附近网关发现。"
+    },
+    {
+      "name": "settings_permission_notifications",
+      "value": "通知"
+    },
+    {
+      "name": "settings_permission_notifications_sub",
+      "value": "允许 OpenClaw 发送本地通知。"
+    },
+    {
+      "name": "settings_permission_notification_listener",
+      "value": "通知监听"
+    },
+    {
+      "name": "settings_permission_notification_listener_sub",
+      "value": "读取第三方通知用于自动化。"
+    },
+    {
+      "name": "settings_permission_photos",
+      "value": "相册"
+    },
+    {
+      "name": "settings_permission_photos_sub",
+      "value": "读取图库中的图片。"
+    },
+    {
+      "name": "settings_permission_contacts",
+      "value": "通讯录"
+    },
+    {
+      "name": "settings_permission_contacts_sub",
+      "value": "为消息工具读取联系人。"
+    },
+    {
+      "name": "settings_permission_calendar",
+      "value": "日历"
+    },
+    {
+      "name": "settings_permission_calendar_sub",
+      "value": "读取和写入日历事件。"
+    },
+    {
+      "name": "settings_permission_motion",
+      "value": "运动"
+    },
+    {
+      "name": "settings_permission_motion_sub",
+      "value": "自动化所需的活动识别。"
+    },
+    {
+      "name": "settings_permission_sms",
+      "value": "短信"
+    },
+    {
+      "name": "settings_permission_sms_sub",
+      "value": "发送和读取短信。"
+    },
+    {
+      "name": "settings_permission_call_log",
+      "value": "通话记录"
+    },
+    {
+      "name": "settings_permission_call_log_sub",
+      "value": "读取最近通话历史。"
+    },
+    {
+      "name": "settings_permission_unavailable_platform",
+      "value": "当前平台不可用"
+    },
+    {
+      "name": "settings_permission_granted",
+      "value": "已授权"
+    },
+    {
+      "name": "settings_permission_grant",
+      "value": "去授权"
+    },
+    {
+      "name": "settings_permission_manage",
+      "value": "管理"
+    },
+    {
+      "name": "settings_platform_harmony",
+      "value": "OpenHarmony 节点"
+    },
+    {
+      "name": "settings_refresh_failed",
+      "value": "刷新失败，请到连接页检查配置。"
     },
     {
       "name": "onboarding_first_run_kicker",
@@ -367,6 +659,42 @@
     {
       "name": "onboarding_gateway_scan_title",
       "value": "扫描引导二维码"
+    },
+    {
+      "name": "onboarding_gateway_qr_primary_hint",
+      "value": "在网关主机上运行 `openclaw qr`，然后用本设备扫码。"
+    },
+    {
+      "name": "onboarding_scan_failed",
+      "value": "扫描失败"
+    },
+    {
+      "name": "onboarding_error_scan_qr_first",
+      "value": "请先扫描二维码，或使用高级设置。"
+    },
+    {
+      "name": "onboarding_error_setup_code_invalid_url",
+      "value": "设置码中的网关 URL 无效。"
+    },
+    {
+      "name": "onboarding_error_manual_invalid_endpoint",
+      "value": "手动端点无效。"
+    },
+    {
+      "name": "onboarding_error_invalid_gateway_url",
+      "value": "网关 URL 无效。"
+    },
+    {
+      "name": "onboarding_perm_none_selected",
+      "value": "未选择任何权限"
+    },
+    {
+      "name": "onboarding_qr_error_invalid_setup_code",
+      "value": "二维码中未包含有效的设置码。"
+    },
+    {
+      "name": "connect_invalid_gateway_url_in_setup",
+      "value": "设置码中的网关 URL 无效"
     },
     {
       "name": "onboarding_run_on_gateway_host",
@@ -478,7 +806,147 @@
     },
     {
       "name": "onboarding_permissions_intro",
-      "value": "现在只需开启你需要的权限，之后可以在设置中随时调整。"
+      "value": "按需开启即可，之后随时可在设置中更改。"
+    },
+    {
+      "name": "onboarding_welcome_card_gateway_title",
+      "value": "连接到你的网关"
+    },
+    {
+      "name": "onboarding_welcome_card_gateway_subtitle",
+      "value": "扫描二维码或手动输入主机"
+    },
+    {
+      "name": "onboarding_welcome_card_permissions_title",
+      "value": "选择需要的权限"
+    },
+    {
+      "name": "onboarding_welcome_card_permissions_subtitle",
+      "value": "只开需要的，可随时调整"
+    },
+    {
+      "name": "onboarding_welcome_card_features_title",
+      "value": "聊天、语音与屏幕"
+    },
+    {
+      "name": "onboarding_welcome_card_features_subtitle",
+      "value": "在手机上完整控制操作员"
+    },
+    {
+      "name": "onboarding_welcome_card_verify_title",
+      "value": "验证连接"
+    },
+    {
+      "name": "onboarding_welcome_card_verify_subtitle",
+      "value": "进入应用前进行实时检查"
+    },
+    {
+      "name": "onboarding_section_system",
+      "value": "系统"
+    },
+    {
+      "name": "onboarding_section_media",
+      "value": "媒体"
+    },
+    {
+      "name": "onboarding_section_personal_data",
+      "value": "个人数据"
+    },
+    {
+      "name": "onboarding_perm_gateway_discovery_title",
+      "value": "网关发现"
+    },
+    {
+      "name": "onboarding_perm_gateway_discovery_subtitle",
+      "value": "在局域网中发现网关"
+    },
+    {
+      "name": "onboarding_perm_location_title",
+      "value": "位置"
+    },
+    {
+      "name": "onboarding_perm_location_subtitle",
+      "value": "在应用打开时共享设备位置"
+    },
+    {
+      "name": "onboarding_perm_notifications_subtitle",
+      "value": "提醒与前台服务通知"
+    },
+    {
+      "name": "onboarding_perm_notification_listener_title",
+      "value": "通知监听"
+    },
+    {
+      "name": "onboarding_perm_notification_listener_subtitle",
+      "value": "读取并处理通知（需在系统设置中配置）"
+    },
+    {
+      "name": "onboarding_perm_microphone_subtitle",
+      "value": "语音页面前台转写"
+    },
+    {
+      "name": "onboarding_perm_camera_subtitle",
+      "value": "拍照与短视频"
+    },
+    {
+      "name": "onboarding_perm_photos_title",
+      "value": "相册"
+    },
+    {
+      "name": "onboarding_perm_photos_subtitle",
+      "value": "访问近期照片"
+    },
+    {
+      "name": "onboarding_perm_contacts_title",
+      "value": "通讯录"
+    },
+    {
+      "name": "onboarding_perm_contacts_subtitle",
+      "value": "搜索与添加联系人"
+    },
+    {
+      "name": "onboarding_perm_calendar_title",
+      "value": "日历"
+    },
+    {
+      "name": "onboarding_perm_calendar_subtitle",
+      "value": "读取与创建日历事件"
+    },
+    {
+      "name": "onboarding_perm_motion_title",
+      "value": "运动"
+    },
+    {
+      "name": "onboarding_perm_motion_subtitle",
+      "value": "活动与步数"
+    },
+    {
+      "name": "onboarding_perm_unavailable_on_device",
+      "value": "此设备不可用"
+    },
+    {
+      "name": "onboarding_perm_sms_title",
+      "value": "短信"
+    },
+    {
+      "name": "onboarding_perm_sms_subtitle",
+      "value": "允许网关触发发送或检索短信"
+    },
+    {
+      "name": "onboarding_perm_call_log_title",
+      "value": "通话记录"
+    },
+    {
+      "name": "onboarding_perm_call_log_subtitle",
+      "value": "callLog.search"
+    },
+    {
+      "name": "onboarding_perm_granted",
+      "value": "已授权"
+    },
+    {
+      "name": "onboarding_perm_not_granted",
+      "value": "未授权"
     },
     {
       "name": "onboarding_perm_camera_title",
@@ -517,8 +985,12 @@
       "value": "已启用的权限"
     },
     {
+      "name": "onboarding_review_permissions_card_label",
+      "value": "权限"
+    },
+    {
       "name": "onboarding_review_connect_hint",
-      "value": "点击「连接」来验证网关连通性和认证。"
+      "value": "点击「连接」验证网关是否可达。"
     },
     {
       "name": "onboarding_review_status_fmt",
@@ -533,12 +1005,48 @@
       "value": "需要配对"
     },
     {
+      "name": "onboarding_connection_failed_title",
+      "value": "连接失败"
+    },
+    {
+      "name": "onboarding_pairing_failed_body",
+      "value": "请在网关主机上批准本机，或复制下方报告。"
+    },
+    {
+      "name": "onboarding_connection_failed_body",
+      "value": "复制此报告并提供给你的 Claw。"
+    },
+    {
+      "name": "onboarding_diagnostics_error_label",
+      "value": "错误"
+    },
+    {
+      "name": "onboarding_copy_report_button",
+      "value": "复制报告给 Claw"
+    },
+    {
+      "name": "onboarding_copy_report_toast",
+      "value": "已复制网关诊断信息"
+    },
+    {
+      "name": "onboarding_review_connected_title",
+      "value": "已连接"
+    },
+    {
+      "name": "onboarding_review_gateway_fallback",
+      "value": "gateway"
+    },
+    {
+      "name": "onboarding_openclaw_harmonyos_diag_fmt",
+      "value": "OpenClaw HarmonyOS %1$s"
+    },
+    {
       "name": "onboarding_review_then_tap_connect_again",
       "value": "然后再点击「连接」。"
     },
     {
       "name": "onboarding_review_connected_to_fmt",
-      "value": "已连接到网关"
+      "value": "已连接到 %1$s"
     }
   ]
 }

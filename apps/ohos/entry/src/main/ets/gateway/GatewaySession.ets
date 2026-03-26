@@ -10,6 +10,7 @@ import { i18n } from '@kit.LocalizationKit';
 import { GATEWAY_PROTOCOL_VERSION } from '../protocol/OpenClawProtocol';
 import { buildV3 } from './DeviceAuthPayload';
 import { buildWsUrl, GatewayEndpoint } from './GatewayEndpoint';
+import { normalizeCanvasHostUrl, replaceCanvasCapabilityInScopedHostUrl } from './CanvasHostUrl';
 import { DeviceIdentityStore, DeviceIdentity } from './DeviceIdentityStore';
 import { DeviceAuthStore } from './DeviceAuthStore';
 import { DeviceAuthTokenStore } from './DeviceAuthStore';
@@ -158,6 +159,7 @@ export class GatewaySession {
   private closed = false;
   private connectSucceeded = false;
   private mainSessionKey: string | null = null;
+  private canvasHostUrl: string | null = null;
   private runLoopAbort = false;
   private identityStore: DeviceIdentityStore;
   private deviceAuthStore: DeviceAuthTokenStore;
@@ -267,7 +269,7 @@ export class GatewaySession {
 
   private async handleConnectSuccess(
     payloadJson: string | null,
-    _endpoint: GatewayEndpoint,
+    endpoint: GatewayEndpoint,
     role: string,
     deviceId: string
   ): Promise<void> {
@@ -281,6 +283,8 @@ export class GatewaySession {
     const snapshot = obj['snapshot'] as JsonRecord | null;
     const sessionDefaults = snapshot ? (snapshot['sessionDefaults'] as JsonRecord) : null;
     this.mainSessionKey = sessionDefaults ? ((sessionDefaults['mainSessionKey'] as string) ?? null) : null;
+    const rawCanvas = obj['canvasHostUrl'] as string | undefined;
+    this.canvasHostUrl = normalizeCanvasHostUrl(rawCanvas ?? null, endpoint);
   }
 
   private async buildConnectParams(
@@ -568,6 +572,7 @@ export class GatewaySession {
     if (this.closed) return;
     this.closed = true;
     this.ws = null;
+    this.canvasHostUrl = null;
     const err = new Error(message);
     this.pending.forEach((p: PendingRpc) => {
       clearTimeout(p.timeoutId);
@@ -591,10 +596,41 @@ export class GatewaySession {
     });
     this.pending.clear();
     this.mainSessionKey = null;
+    this.canvasHostUrl = null;
     this.onDisconnected('Offline');
   }
 
   getMainSessionKey(): string | null {
     return this.mainSessionKey;
+  }
+
+  getCanvasHostUrl(): string | null {
+    return this.canvasHostUrl;
+  }
+
+  async refreshNodeCanvasCapability(timeoutMs: number = 8000): Promise<boolean> {
+    try {
+      const res = await this.request('node.canvas.capability.refresh', {}, timeoutMs);
+      if (!res.ok || !res.payloadJson) {
+        return false;
+      }
+      const payloadObj = JSON.parse(res.payloadJson) as JsonRecord;
+      const refreshedCapability = String(payloadObj['canvasCapability'] ?? '').trim();
+      if (refreshedCapability.length === 0) {
+        return false;
+      }
+      const scoped = (this.canvasHostUrl ?? '').trim();
+      if (scoped.length === 0) {
+        return false;
+      }
+      const refreshedUrl = replaceCanvasCapabilityInScopedHostUrl(scoped, refreshedCapability);
+      if (!refreshedUrl) {
+        return false;
+      }
+      this.canvasHostUrl = refreshedUrl;
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

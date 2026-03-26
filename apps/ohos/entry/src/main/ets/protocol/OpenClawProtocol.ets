@@ -26,11 +26,41 @@ export const OpenClawSystemCommand: OpenClawSystemCommandType = {
 };
 
 export interface OpenClawCapabilityType {
+  readonly Canvas: string;
   readonly Device: string;
   readonly System: string;
 }
 
 export const OpenClawCapability: OpenClawCapabilityType = {
+  Canvas: 'canvas',
   Device: 'device',
   System: 'system',
+};
+
+export interface OpenClawCanvasCommandType {
+  Present: string;
+  Hide: string;
+  Navigate: string;
+  Eval: string;
+  Snapshot: string;
+}
+
+export const OpenClawCanvasCommand: OpenClawCanvasCommandType = {
+  Present: 'canvas.present',
+  Hide: 'canvas.hide',
+  Navigate: 'canvas.navigate',
+  Eval: 'canvas.eval',
+  Snapshot: 'canvas.snapshot',
+};
+
+export interface OpenClawCanvasA2UICommandType {
+  Push: string;
+  PushJSONL: string;
+  Reset: string;
+}
+
+export const OpenClawCanvasA2UICommand: OpenClawCanvasA2UICommandType = {
+  Push: 'canvas.a2ui.push',
+  PushJSONL: 'canvas.a2ui.pushJSONL',
+  Reset: 'canvas.a2ui.reset',
 };

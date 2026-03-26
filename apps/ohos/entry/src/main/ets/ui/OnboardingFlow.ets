@@ -3,6 +3,7 @@
  * Matches Android flow: scan QR primary, advanced setup with SetupCode/Manual.
  */
 import { common } from '@kit.AbilityKit';
+import { pasteboard } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { promptAction } from '@kit.ArkUI';
@@ -23,6 +24,34 @@ export struct OnboardingFlow {
   @StorageLink('nodeRuntime') nodeRuntime: NodeRuntime =
     AppStorage.get<NodeRuntime>('nodeRuntime') as NodeRuntime;
 
+  private resStr(res: Resource): string {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return '';
+    }
+    try {
+      return ctx.resourceManager.getStringSync(res);
+    } catch {
+      return '';
+    }
+  }
+
+  private formatStepOf(): string {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return `Step ${this.stepIndex()} of 4`;
+    }
+    try {
+      return ctx.resourceManager.getStringSync(
+        $r('app.string.onboarding_step_of_fmt'),
+        this.stepIndex(),
+        4
+      );
+    } catch {
+      return `Step ${this.stepIndex()} of 4`;
+    }
+  }
+
   @State step: OnboardingStep = 'welcome';
   @State setupCode: string = '';
   @State manualHost: string = '10.0.2.2';
@@ -38,9 +67,24 @@ export struct OnboardingFlow {
   @State attemptedConnect: boolean = false;
   @State statusText: string = 'Offline';
   @State isConnected: boolean = false;
+  @State remoteAddress: string = '';
+  @State enableDiscovery: boolean = false;
+  @State enableLocation: boolean = false;
   @State enableCamera: boolean = false;
   @State enableMicrophone: boolean = false;
   @State enableNotifications: boolean = false;
+  @State enableNotificationListener: boolean = false;
+  @State enablePhotos: boolean = false;
+  @State enableContacts: boolean = false;
+  @State enableCalendar: boolean = false;
+  @State enableMotion: boolean = false;
+  @State enableSms: boolean = false;
+  @State enableCallLog: boolean = false;
+  /** Match Android: hide SMS / call log rows when capability is absent. */
+  private readonly smsRowAvailable: boolean = false;
+  private readonly callLogRowAvailable: boolean = false;
+  /** Motion sensors not checked on HarmonyOS yet; keep row disabled like unsupported hardware. */
+  private readonly motionRowAvailable: boolean = false;
 
   aboutToAppear(): void {
     this.nodeRuntime.setStatusListener((s) => {
@@ -49,10 +93,12 @@ export struct OnboardingFlow {
       setTimeout(() => {
         this.statusText = s.statusText;
         this.isConnected = s.isConnected;
+        this.remoteAddress = s.remoteAddress;
       }, 0);
     });
     this.statusText = this.nodeRuntime.getStatusText();
     this.isConnected = this.nodeRuntime.getIsConnected();
+    this.remoteAddress = this.nodeRuntime.getRemoteAddress();
   }
 
   private async doScanQr(): Promise<void> {
@@ -71,13 +117,13 @@ export struct OnboardingFlow {
       if (!raw) return;
       const code = resolveScannedSetupCode(raw);
       if (!code) {
-        this.gatewayError = 'Invalid setup code';
+        this.gatewayError = this.resStr($r('app.string.onboarding_qr_error_invalid_setup_code')) || 'Invalid setup code';
         return;
       }
       this.setupCode = code;
       this.gatewayInputMode = 'setupCode';
     } catch (_) {
-      this.gatewayError = 'Scan failed';
+      this.gatewayError = this.resStr($r('app.string.onboarding_scan_failed')) || 'Scan failed';
     }
   }
 
@@ -90,12 +136,12 @@ export struct OnboardingFlow {
       if (this.gatewayInputMode === 'setupCode') {
         const decoded = decodeGatewaySetupCode(this.setupCode);
         if (!decoded) {
-          this.gatewayError = 'Scan QR first or use Advanced setup';
+          this.gatewayError = this.resStr($r('app.string.onboarding_error_scan_qr_first')) || 'Scan QR first, or use advanced setup.';
           return;
         }
         const ep = parseGatewayEndpoint(decoded.url);
         if (!ep) {
-          this.gatewayError = 'Setup code has invalid gateway URL';
+          this.gatewayError = this.resStr($r('app.string.onboarding_error_setup_code_invalid_url')) || 'Gateway URL in setup code is invalid.';
           return;
         }
         this.gatewayUrl = decoded.url;
@@ -110,7 +156,7 @@ export struct OnboardingFlow {
         );
         const ep = manualUrl ? parseGatewayEndpoint(manualUrl) : null;
         if (!ep) {
-          this.gatewayError = 'Manual endpoint is invalid';
+          this.gatewayError = this.resStr($r('app.string.onboarding_error_manual_invalid_endpoint')) || 'Manual endpoint is invalid.';
           return;
         }
         this.gatewayUrl = ep.displayUrl;
@@ -134,7 +180,7 @@ export struct OnboardingFlow {
 
   private async doConnect(): Promise<void> {
     if (!this.gatewayEndpoint) {
-      this.gatewayError = 'Invalid gateway URL';
+      this.gatewayError = this.resStr($r('app.string.onboarding_error_invalid_gateway_url')) || 'Gateway URL is invalid.';
       this.step = 'gateway';
       return;
     }
@@ -187,14 +233,342 @@ export struct OnboardingFlow {
     return ep?.displayUrl ?? '';
   }
 
-  private localizeStatusText(raw: string): string {
+  /** Mirrors Android `GatewayDiagnostics.gatewayStatusForDisplay`. */
+  private gatewayStatusForDisplay(raw: string): string {
     const s = raw.trim();
-    if (s.length === 0) return 'Offline';
-    return s;
+    return s.length > 0 ? s : 'Offline';
+  }
+
+  private gatewayStatusHasDiagnostics(statusText: string): boolean {
+    const lower = this.gatewayStatusForDisplay(statusText).toLowerCase();
+    return lower !== 'offline' && !lower.includes('connecting');
+  }
+
+  private gatewayStatusLooksLikePairing(statusText: string): boolean {
+    const lower = this.gatewayStatusForDisplay(statusText).toLowerCase();
+    return lower.includes('pair') || lower.includes('approve');
+  }
+
+  private connectedDetailLine(): string {
+    const addr = this.remoteAddress.trim();
+    if (addr.length > 0) {
+      return addr;
+    }
+    return this.resStr($r('app.string.onboarding_review_gateway_fallback')) || 'gateway';
+  }
+
+  private formatOpenClawHarmonyOsVersion(): string {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    const ver = this.nodeRuntime.getVersion();
+    if (!ctx) {
+      return `OpenClaw HarmonyOS ${ver}`;
+    }
+    try {
+      return ctx.resourceManager.getStringSync($r('app.string.onboarding_openclaw_harmonyos_diag_fmt'), ver);
+    } catch {
+      return `OpenClaw HarmonyOS ${ver}`;
+    }
+  }
+
+  private buildGatewayDiagnosticsReport(gatewayAddress: string, statusLabel: string): string {
+    const device = this.nodeRuntime.getDeviceModel();
+    const ver = this.nodeRuntime.getVersion();
+    const endpoint = gatewayAddress.trim().length > 0 ? gatewayAddress.trim() : 'unknown';
+    const status = statusLabel.trim().length > 0 ? statusLabel.trim() : 'Offline';
+    return (
+      'Help diagnose this OpenClaw HarmonyOS gateway connection failure.\n\n' +
+      'Please:\n' +
+      '- pick one route only: same machine, same LAN, Tailscale, or public URL\n' +
+      '- classify this as pairing/auth, TLS trust, wrong advertised route, wrong address/port, or gateway down\n' +
+      '- quote the exact app status/error below\n' +
+      '- tell me whether `openclaw devices list` should show a pending pairing request\n' +
+      '- if more signal is needed, ask for `openclaw qr --json`, `openclaw devices list`, and `openclaw nodes status`\n' +
+      '- give the next exact command or tap\n\n' +
+      'Debug info:\n' +
+      '- screen: onboarding final check\n' +
+      `- app version: OpenClaw HarmonyOS ${ver}\n` +
+      `- device: ${device}\n` +
+      `- gateway address: ${endpoint}\n` +
+      `- status/error: ${status}\n`
+    );
+  }
+
+  private async copyDiagnosticsReport(): Promise<void> {
+    const gatewayAddr = this.gatewayEndpoint?.displayUrl ?? '';
+    const statusLabel = this.gatewayStatusForDisplay(this.statusText);
+    const report = this.buildGatewayDiagnosticsReport(gatewayAddr, statusLabel);
+    try {
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, report);
+      const sys = pasteboard.getSystemPasteboard();
+      await sys.setData(data);
+      await promptAction.showToast({
+        message: this.resStr($r('app.string.onboarding_copy_report_toast')) || 'Copied gateway diagnostics',
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      hilog.error(0x0000, 'OnboardingFlow', 'copyDiagnosticsReport: %{public}s', msg);
+      try {
+        await promptAction.showToast({ message: 'Copy failed' });
+      } catch (_) {
+        // Best-effort UI; clipboard path already failed.
+      }
+    }
+  }
+
+  private permissionStatusLine(statusOverride: string, osGranted: boolean): string {
+    if (statusOverride.length > 0) {
+      return statusOverride;
+    }
+    return osGranted ?
+      (this.resStr($r('app.string.onboarding_perm_granted')) || 'Granted') :
+      (this.resStr($r('app.string.onboarding_perm_not_granted')) || 'Not granted');
+  }
+
+  private permissionStatusColor(statusOverride: string, osGranted: boolean): string {
+    if (statusOverride.length > 0) {
+      return '#8A92A2';
+    }
+    return osGranted ? '#2F8C5A' : '#C8841A';
+  }
+
+  private applyPermToggle(key: number, v: boolean): void {
+    switch (key) {
+      case 0:
+        this.enableDiscovery = v;
+        break;
+      case 1:
+        this.enableLocation = v;
+        break;
+      case 2:
+        this.enableNotifications = v;
+        break;
+      case 3:
+        this.enableNotificationListener = v;
+        break;
+      case 4:
+        this.enableMicrophone = v;
+        break;
+      case 5:
+        this.enableCamera = v;
+        break;
+      case 6:
+        this.enablePhotos = v;
+        break;
+      case 7:
+        this.enableContacts = v;
+        break;
+      case 8:
+        this.enableCalendar = v;
+        break;
+      case 9:
+        this.enableMotion = v;
+        break;
+      case 10:
+        this.enableSms = v;
+        break;
+      case 11:
+        this.enableCallLog = v;
+        break;
+      default:
+        break;
+    }
+  }
+
+  private reviewMethodLabel(): string {
+    if (this.gatewayInputMode === 'setupCode') {
+      return this.resStr($r('app.string.onboarding_review_method_qr_setup_code'));
+    }
+    return this.resStr($r('app.string.connect_method_manual'));
+  }
+
+  private reviewGatewayAddress(): string {
+    const u = this.gatewayEndpoint?.displayUrl ?? '';
+    return u.length > 0 ? u : 'Invalid gateway URL';
+  }
+
+  private reviewSummaryLabelUpper(res: Resource): string {
+    return this.resStr(res).toUpperCase();
+  }
+
+  private enabledPermissionsSummary(): string {
+    const parts: string[] = [];
+    if (this.enableDiscovery) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_gateway_discovery_title')));
+    }
+    if (this.enableLocation) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_location_title')));
+    }
+    if (this.enableNotifications) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_notifications_title')));
+    }
+    if (this.enableNotificationListener) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_notification_listener_title')));
+    }
+    if (this.enableMicrophone) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_microphone_title')));
+    }
+    if (this.enableCamera) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_camera_title')));
+    }
+    if (this.enablePhotos) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_photos_title')));
+    }
+    if (this.enableContacts) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_contacts_title')));
+    }
+    if (this.enableCalendar) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_calendar_title')));
+    }
+    if (this.motionRowAvailable && this.enableMotion) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_motion_title')));
+    }
+    if (this.smsRowAvailable && this.enableSms) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_sms_title')));
+    }
+    if (this.callLogRowAvailable && this.enableCallLog) {
+      parts.push(this.resStr($r('app.string.onboarding_perm_call_log_title')));
+    }
+    return parts.length > 0 ?
+      parts.filter((p) => p.length > 0).join(', ') :
+      (this.resStr($r('app.string.onboarding_perm_none_selected')) || 'No permissions selected');
   }
 
   private stepIndex(): number {
     return this.step === 'welcome' ? 1 : this.step === 'gateway' ? 2 : this.step === 'permissions' ? 3 : 4;
+  }
+
+  @Builder
+  WelcomeFeatureCard(iconRes: Resource, titleRes: Resource, subtitleRes: Resource, accentColor: string, accentSoftBg: string) {
+    Row({ space: 14 }) {
+      Column() {
+        SymbolGlyph(iconRes)
+          .fontSize(22)
+          .fontColor([accentColor])
+      }
+      .width(42)
+      .height(42)
+      .borderRadius(11)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor(accentSoftBg)
+      Column({ space: 2 }) {
+        Text(titleRes)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#17181C')
+        Text(subtitleRes)
+          .fontSize(14)
+          .fontColor('#4D5563')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E5E7EC' })
+  }
+
+  @Builder
+  PermissionSectionHeader(titleRes: Resource) {
+    Text(this.resStr(titleRes).toUpperCase())
+      .fontSize(12)
+      .fontWeight(FontWeight.Bold)
+      .fontColor('#1D5DD8')
+      .letterSpacing(1.2)
+      .margin({ top: 8 })
+  }
+
+  @Builder
+  PermissionToggleRow(
+    titleRes: Resource,
+    subtitleRes: Resource,
+    osGranted: boolean,
+    rowEnabled: boolean,
+    statusOverride: string,
+    isOn: boolean,
+    toggleKey: number,
+  ) {
+    Row({ space: 12 }) {
+      Column({ space: 2 }) {
+        Text(titleRes)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#17181C')
+        Text(subtitleRes)
+          .fontSize(14)
+          .fontColor('#4D5563')
+        Text(this.permissionStatusLine(statusOverride, osGranted))
+          .fontSize(12)
+          .fontColor(this.permissionStatusColor(statusOverride, osGranted))
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Toggle({ type: ToggleType.Switch, isOn: isOn })
+        .enabled(rowEnabled)
+        .onChange((v: boolean) => {
+          this.applyPermToggle(toggleKey, v);
+        })
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 50 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  ReviewSummaryCard(iconRes: Resource, labelUpper: string, valueText: string, accentColor: string, accentSoftBg: string) {
+    Row({ space: 14 }) {
+      Column() {
+        SymbolGlyph(iconRes)
+          .fontSize(22)
+          .fontColor([accentColor])
+      }
+      .width(42)
+      .height(42)
+      .borderRadius(11)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor(accentSoftBg)
+      Column({ space: 2 }) {
+        Text(labelUpper)
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#4D5563')
+          .letterSpacing(0.8)
+        Text(valueText)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#17181C')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E5E7EC' })
+    .alignItems(VerticalAlign.Top)
+  }
+
+  @Builder
+  ReviewCommandBlock(command: string) {
+    Row() {
+      Column()
+        .width(3)
+        .constraintSize({ minHeight: 40 })
+        .backgroundColor('#3FC97A')
+        .borderRadius(2)
+      Text(command)
+        .fontSize(14)
+        .fontFamily('monospace')
+        .fontColor('#E8EAEE')
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .backgroundColor('#15171B')
+    .borderRadius(12)
+    .border({ width: 1, color: '#2B2E35' })
   }
 
   @Builder
@@ -252,7 +626,7 @@ export struct OnboardingFlow {
           .fontSize(28)
           .fontWeight(FontWeight.Bold)
           .fontColor('#17181C')
-        Text(`Step ${this.stepIndex()} of 4`)
+        Text(this.formatStepOf())
           .fontSize(12)
           .fontColor('#1D5DD8')
       }
@@ -331,55 +705,35 @@ export struct OnboardingFlow {
 
   @Builder
   WelcomeStep() {
-    Column({ space: 12 }) {
-      Text($r('app.string.onboarding_step_welcome_title'))
-        .fontSize(24)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#17181C')
-      Row({ space: 10 }) {
-        Text('•')
-          .fontSize(15)
-          .fontColor('#1D5DD8')
-        Text($r('app.string.onboarding_step_welcome_bullet_control_gateway'))
-          .fontSize(15)
-          .fontColor('#4D5563')
-          .layoutWeight(1)
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Top)
-      Row({ space: 10 }) {
-        Text('•')
-          .fontSize(15)
-          .fontColor('#1D5DD8')
-        Text($r('app.string.onboarding_step_welcome_bullet_connect_setup_code'))
-          .fontSize(15)
-          .fontColor('#4D5563')
-          .layoutWeight(1)
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Top)
-      Row({ space: 10 }) {
-        Text('•')
-          .fontSize(15)
-          .fontColor('#1D5DD8')
-        Text($r('app.string.onboarding_step_welcome_bullet_enable_permissions'))
-          .fontSize(15)
-          .fontColor('#4D5563')
-          .layoutWeight(1)
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Top)
-      Row({ space: 10 }) {
-        Text('•')
-          .fontSize(15)
-          .fontColor('#1D5DD8')
-        Text($r('app.string.onboarding_step_welcome_bullet_finish_check'))
-          .fontSize(15)
-          .fontColor('#4D5563')
-          .layoutWeight(1)
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Top)
+    Column({ space: 10 }) {
+      this.WelcomeFeatureCard(
+        $r('sys.symbol.ohos_wifi'),
+        $r('app.string.onboarding_welcome_card_gateway_title'),
+        $r('app.string.onboarding_welcome_card_gateway_subtitle'),
+        '#1D5DD8',
+        'rgba(29, 93, 216, 0.1)'
+      )
+      this.WelcomeFeatureCard(
+        $r('sys.symbol.gearshape_fill'),
+        $r('app.string.onboarding_welcome_card_permissions_title'),
+        $r('app.string.onboarding_welcome_card_permissions_subtitle'),
+        '#7C5AC7',
+        'rgba(124, 90, 199, 0.1)'
+      )
+      this.WelcomeFeatureCard(
+        $r('sys.symbol.message_on_message_fill'),
+        $r('app.string.onboarding_welcome_card_features_title'),
+        $r('app.string.onboarding_welcome_card_features_subtitle'),
+        '#2F8C5A',
+        'rgba(47, 140, 90, 0.1)'
+      )
+      this.WelcomeFeatureCard(
+        $r('sys.symbol.checkmark_circle_fill'),
+        $r('app.string.onboarding_welcome_card_verify_title'),
+        $r('app.string.onboarding_welcome_card_verify_subtitle'),
+        '#C8841A',
+        'rgba(200, 132, 26, 0.1)'
+      )
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -394,23 +748,26 @@ export struct OnboardingFlow {
         .fontColor('#17181C')
 
       Column({ space: 8 }) {
-        Text($r('app.string.onboarding_gateway_scan_title'))
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#17181C')
-        Text($r('app.string.onboarding_run_on_gateway_host'))
+        Text($r('app.string.onboarding_gateway_qr_primary_hint'))
           .fontSize(14)
           .fontColor('#4D5563')
-        Text('openclaw qr')
-          .fontSize(14)
-          .fontFamily('monospace')
-          .fontColor('#E8EAEE')
-          .backgroundColor('#15171B')
-          .padding(12)
-          .borderRadius(12)
-        Text($r('app.string.onboarding_then_scan_with_device'))
-          .fontSize(14)
-          .fontColor('#4D5563')
+        Row() {
+          Column()
+            .width(3)
+            .height(42)
+            .backgroundColor('#3FC97A')
+            .borderRadius(2)
+          Text('openclaw qr')
+            .fontSize(14)
+            .fontFamily('monospace')
+            .fontColor('#E8EAEE')
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .backgroundColor('#15171B')
+        .borderRadius(12)
+        .border({ width: 1, color: '#2B2E35' })
       }
       .alignItems(HorizontalAlign.Start)
       .width('100%')
@@ -651,29 +1008,132 @@ export struct OnboardingFlow {
         .fontSize(14)
         .fontColor('#4D5563')
 
-      Row() {
-        Text($r('app.string.onboarding_perm_camera_title'))
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.enableCamera })
-          .onChange((v) => { this.enableCamera = v; })
-      }
-      .width('100%')
+      this.PermissionSectionHeader($r('app.string.onboarding_section_system'))
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_gateway_discovery_title'),
+        $r('app.string.onboarding_perm_gateway_discovery_subtitle'),
+        false,
+        true,
+        '',
+        this.enableDiscovery,
+        0
+      )
       Divider().color('#E5E7EC')
-      Row() {
-        Text($r('app.string.onboarding_perm_microphone_title'))
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.enableMicrophone })
-          .onChange((v) => { this.enableMicrophone = v; })
-      }
-      .width('100%')
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_location_title'),
+        $r('app.string.onboarding_perm_location_subtitle'),
+        false,
+        true,
+        '',
+        this.enableLocation,
+        1
+      )
       Divider().color('#E5E7EC')
-      Row() {
-        Text($r('app.string.onboarding_perm_notifications_title'))
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.enableNotifications })
-          .onChange((v) => { this.enableNotifications = v; })
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_notifications_title'),
+        $r('app.string.onboarding_perm_notifications_subtitle'),
+        false,
+        true,
+        '',
+        this.enableNotifications,
+        2
+      )
+      Divider().color('#E5E7EC')
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_notification_listener_title'),
+        $r('app.string.onboarding_perm_notification_listener_subtitle'),
+        false,
+        true,
+        '',
+        this.enableNotificationListener,
+        3
+      )
+
+      this.PermissionSectionHeader($r('app.string.onboarding_section_media'))
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_microphone_title'),
+        $r('app.string.onboarding_perm_microphone_subtitle'),
+        false,
+        true,
+        '',
+        this.enableMicrophone,
+        4
+      )
+      Divider().color('#E5E7EC')
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_camera_title'),
+        $r('app.string.onboarding_perm_camera_subtitle'),
+        false,
+        true,
+        '',
+        this.enableCamera,
+        5
+      )
+      Divider().color('#E5E7EC')
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_photos_title'),
+        $r('app.string.onboarding_perm_photos_subtitle'),
+        false,
+        true,
+        '',
+        this.enablePhotos,
+        6
+      )
+
+      this.PermissionSectionHeader($r('app.string.onboarding_section_personal_data'))
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_contacts_title'),
+        $r('app.string.onboarding_perm_contacts_subtitle'),
+        false,
+        true,
+        '',
+        this.enableContacts,
+        7
+      )
+      Divider().color('#E5E7EC')
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_calendar_title'),
+        $r('app.string.onboarding_perm_calendar_subtitle'),
+        false,
+        true,
+        '',
+        this.enableCalendar,
+        8
+      )
+      Divider().color('#E5E7EC')
+      this.PermissionToggleRow(
+        $r('app.string.onboarding_perm_motion_title'),
+        $r('app.string.onboarding_perm_motion_subtitle'),
+        false,
+        this.motionRowAvailable,
+        this.motionRowAvailable ? '' : (this.resStr($r('app.string.onboarding_perm_unavailable_on_device')) || ''),
+        this.enableMotion,
+        9
+      )
+      if (this.smsRowAvailable) {
+        Divider().color('#E5E7EC')
+        this.PermissionToggleRow(
+          $r('app.string.onboarding_perm_sms_title'),
+          $r('app.string.onboarding_perm_sms_subtitle'),
+          false,
+          true,
+          '',
+          this.enableSms,
+          10
+        )
       }
-      .width('100%')
+      if (this.callLogRowAvailable) {
+        Divider().color('#E5E7EC')
+        this.PermissionToggleRow(
+          $r('app.string.onboarding_perm_call_log_title'),
+          $r('app.string.onboarding_perm_call_log_subtitle'),
+          false,
+          true,
+          '',
+          this.enableCallLog,
+          11
+        )
+      }
 
       Text($r('app.string.onboarding_permissions_footer'))
         .fontSize(14)
@@ -685,93 +1145,176 @@ export struct OnboardingFlow {
 
   @Builder
   FinalStep() {
-    Column({ space: 12 }) {
+    Column({ space: 10 }) {
       Text($r('app.string.onboarding_review_title'))
         .fontSize(24)
         .fontWeight(FontWeight.Medium)
         .fontColor('#17181C')
 
-      Text($r('app.string.onboarding_review_method_label'))
-        .fontSize(12)
-        .fontColor('#4D5563')
-      Text(this.gatewayInputMode === 'setupCode' ?
-        $r('app.string.onboarding_review_method_qr_setup_code') :
-        $r('app.string.connect_method_manual'))
-        .fontSize(16)
-        .fontColor('#17181C')
-
-      Text($r('app.string.onboarding_review_gateway_label'))
-        .fontSize(12)
-        .fontColor('#4D5563')
-      Text(this.gatewayEndpoint?.displayUrl ?? '')
-        .fontSize(16)
-        .fontColor('#17181C')
-
-      Text($r('app.string.onboarding_review_enabled_perms_label'))
-        .fontSize(12)
-        .fontColor('#4D5563')
-      Text(
-        [this.enableCamera && 'Camera', this.enableMicrophone && 'Microphone', this.enableNotifications && 'Notifications']
-          .filter(Boolean)
-          .join(', ') || 'None selected'
+      this.ReviewSummaryCard(
+        $r('sys.symbol.link'),
+        this.reviewSummaryLabelUpper($r('app.string.onboarding_review_method_label')),
+        this.reviewMethodLabel(),
+        '#1D5DD8',
+        'rgba(29, 93, 216, 0.1)'
       )
-        .fontSize(16)
-        .fontColor('#17181C')
-
-      Text($r('app.string.onboarding_review_status_label'))
-        .fontSize(12)
-        .fontColor('#4D5563')
-      Text(this.localizeStatusText(this.statusText))
-        .fontSize(16)
-        .fontColor(this.isConnected ? '#2F8C5A' : '#4D5563')
-      Divider().color('#E5E7EC')
+      this.ReviewSummaryCard(
+        $r('sys.symbol.cloud_fill'),
+        this.reviewSummaryLabelUpper($r('app.string.onboarding_review_gateway_label')),
+        this.reviewGatewayAddress(),
+        '#7C5AC7',
+        'rgba(124, 90, 199, 0.1)'
+      )
+      this.ReviewSummaryCard(
+        $r('sys.symbol.lock_shield_fill'),
+        this.reviewSummaryLabelUpper($r('app.string.onboarding_review_permissions_card_label')),
+        this.enabledPermissionsSummary(),
+        '#2F8C5A',
+        'rgba(47, 140, 90, 0.1)'
+      )
 
       if (!this.attemptedConnect) {
-        Text($r('app.string.onboarding_review_connect_hint'))
-          .fontSize(14)
-          .fontColor('#4D5563')
-      } else {
-        if (this.isConnected) {
-          Text($r('app.string.onboarding_review_connected_to_fmt'))
+        Row({ space: 12 }) {
+          Column() {
+            SymbolGlyph($r('sys.symbol.ohos_wifi'))
+              .fontSize(22)
+              .fontColor(['#1D5DD8'])
+          }
+          .width(42)
+          .height(42)
+          .borderRadius(11)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('rgba(29, 93, 216, 0.1)')
+          Text($r('app.string.onboarding_review_connect_hint'))
             .fontSize(14)
-            .fontColor('#2F8C5A')
-        } else {
-          Column({ space: 8 }) {
-            Text($r('app.string.onboarding_review_pairing_required_title'))
+            .fontColor('#1D5DD8')
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding(14)
+        .backgroundColor('rgba(29, 93, 216, 0.08)')
+        .borderRadius(14)
+        .border({ width: 1, color: 'rgba(29, 93, 216, 0.2)' })
+        .alignItems(VerticalAlign.Center)
+      } else if (this.isConnected) {
+        Row({ space: 12 }) {
+          Column() {
+            SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+              .fontSize(22)
+              .fontColor(['#2F8C5A'])
+          }
+          .width(42)
+          .height(42)
+          .borderRadius(11)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('rgba(47, 140, 90, 0.1)')
+          Column({ space: 2 }) {
+            Text($r('app.string.onboarding_review_connected_title'))
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
-              .fontColor('#17181C')
+              .fontColor('#2F8C5A')
+            Text(this.connectedDetailLine())
+              .fontSize(14)
+              .fontColor('rgba(47, 140, 90, 0.85)')
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+        }
+        .width('100%')
+        .padding(14)
+        .backgroundColor('rgba(47, 140, 90, 0.12)')
+        .borderRadius(14)
+        .border({ width: 1, color: 'rgba(47, 140, 90, 0.2)' })
+        .alignItems(VerticalAlign.Center)
+      } else {
+        Column({ space: 10 }) {
+          Row({ space: 12 }) {
+            Column() {
+              SymbolGlyph($r('sys.symbol.link'))
+                .fontSize(22)
+                .fontColor(['#C8841A'])
+            }
+            .width(42)
+            .height(42)
+            .borderRadius(11)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor('rgba(200, 132, 26, 0.1)')
+            Column({ space: 2 }) {
+              Text(
+                this.gatewayStatusLooksLikePairing(this.statusText) ?
+                  $r('app.string.onboarding_review_pairing_required_title') :
+                  $r('app.string.onboarding_connection_failed_title')
+              )
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#C8841A')
+              Text(
+                this.gatewayStatusLooksLikePairing(this.statusText) ?
+                  $r('app.string.onboarding_pairing_failed_body') :
+                  $r('app.string.onboarding_connection_failed_body')
+              )
+                .fontSize(14)
+                .fontColor('#4D5563')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+
+          if (this.gatewayStatusHasDiagnostics(this.statusText)) {
+            Text($r('app.string.onboarding_diagnostics_error_label'))
+              .fontSize(12)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#4D5563')
+            Text(this.gatewayStatusForDisplay(this.statusText))
+              .fontSize(14)
+              .fontFamily('monospace')
+              .fontColor('#E8EAEE')
+              .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+              .width('100%')
+              .backgroundColor('#15171B')
+              .borderRadius(12)
+              .border({ width: 1, color: '#2B2E35' })
+            Text(this.formatOpenClawHarmonyOsVersion())
+              .fontSize(12)
+              .fontColor('#4D5563')
+            Button(this.resStr($r('app.string.onboarding_copy_report_button')) || 'Copy Report for Claw')
+              .width('100%')
+              .height(48)
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#C8841A')
+              .backgroundColor('#FFFFFF')
+              .border({ width: 1, color: 'rgba(200, 132, 26, 0.3)' })
+              .onClick(() => {
+                void this.copyDiagnosticsReport();
+              })
+          }
+
+          if (this.gatewayStatusLooksLikePairing(this.statusText)) {
             Text($r('app.string.onboarding_run_on_gateway_host'))
               .fontSize(14)
               .fontColor('#4D5563')
-            Text('openclaw devices list')
-              .fontSize(14)
-              .fontFamily('monospace')
-              .fontColor('#E8EAEE')
-              .backgroundColor('#15171B')
-              .padding(12)
-              .borderRadius(12)
-            Text('openclaw devices approve <requestId>')
-              .fontSize(14)
-              .fontFamily('monospace')
-              .fontColor('#E8EAEE')
-              .backgroundColor('#15171B')
-              .padding(12)
-              .borderRadius(12)
+            this.ReviewCommandBlock('openclaw devices list')
+            this.ReviewCommandBlock('openclaw devices approve <requestId>')
             Text($r('app.string.onboarding_review_then_tap_connect_again'))
               .fontSize(14)
               .fontColor('#4D5563')
           }
-          .width('100%')
-          .alignItems(HorizontalAlign.Start)
-          .padding({ top: 8 })
+
           if (this.gatewayError.length > 0) {
             Text(this.gatewayError)
               .fontSize(14)
               .fontColor('#C8841A')
-              .margin({ top: 8 })
           }
         }
+        .width('100%')
+        .padding(14)
+        .backgroundColor('rgba(200, 132, 26, 0.1)')
+        .borderRadius(14)
+        .border({ width: 1, color: 'rgba(200, 132, 26, 0.2)' })
+        .alignItems(HorizontalAlign.Start)
       }
     }
     .width('100%')
