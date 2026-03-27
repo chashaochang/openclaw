@@ -4,12 +4,18 @@
  */
 import { common } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
+import { util } from '@kit.ArkTS';
+import { image } from '@kit.ImageKit';
+import { KeyboardAvoidMode } from '@ohos.arkui.UIContext';
 import { Markdown, MarkdownController } from '@luvi/lv-markdown-in';
 import { NodeRuntime } from '../NodeRuntime';
 import { CHAT_ATTACHMENT_MAX_COUNT, pickAndEncodeChatImages, toOutgoingImageAttachments } from '../chat/ChatImageAttach';
 import type { ChatMessage, ChatMessageContent, ChatPendingAttachment, ChatPendingToolCall, ChatSessionEntry } from '../chat/ChatModels';
 import { friendlyChipLabel, resolveSessionChoices, friendlySessionKeyLabel } from '../chat/SessionChips';
 import { HMRouter, HMRouterMgr } from '@hadss/hmrouter';
+
+const CHAT_INLINE_IMAGE_MAX_EDGE = 1280;
+const CHAT_INLINE_IMAGE_MAX_HEIGHT = 240;
 
 export interface ChatTabState {
   messages: ChatMessage[];
@@ -27,6 +33,12 @@ export interface ChatTabState {
 interface ThinkingOption {
   value: string;
   labelKey: string;
+}
+
+interface ToolSummaryRow {
+  icon: string;
+  label: string;
+  detailLine: string | null;
 }
 
 function buildThinkingOptions(): ThinkingOption[] {
@@ -58,9 +70,31 @@ function defaultChatTabState(): ChatTabState {
 
 function roleLabel(role: string): string {
   const r = role.trim().toLowerCase();
-  if (r === 'user') return 'USER';
-  if (r === 'system') return 'SYSTEM';
-  return 'ASSISTANT';
+  if (r === 'user') return 'You';
+  if (r === 'system') return 'System';
+  return 'OpenClaw';
+}
+
+function titleCaseWords(raw: string): string {
+  const text = raw.trim();
+  if (text.length === 0) {
+    return 'Tool';
+  }
+  const parts = text.replace(/[_-]+/g, ' ').split(/\s+/);
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const word = parts[i];
+    if (word.length === 0) {
+      continue;
+    }
+    const upper = word.toUpperCase();
+    if (word.length <= 2 && word === upper) {
+      out.push(word);
+      continue;
+    }
+    out.push(word.charAt(0).toUpperCase() + word.slice(1).toLowerCase());
+  }
+  return out.join(' ');
 }
 
 @HMRouter({
@@ -75,8 +109,22 @@ export struct ChatTabScreen {
   @State inputText: string = '';
   @State pendingAttachments: ChatPendingAttachment[] = [];
   @State plusMenuVisible: boolean = false;
+  @State inlineImageVersion: number = 0;
+  @State previewImageKey: string = '';
+  @State previewImageTitle: string = '';
+  @State shouldAutoFollowChat: boolean = true;
+  @State showJumpToLatest: boolean = false;
+  @State composerFocused: boolean = false;
+  private chatListenerId: number = -1;
   private listScroller: ListScroller = new ListScroller();
-  private prevScrollKey: string = '';
+  private prevStructureScrollKey: string = '';
+  private prevStreamScrollKey: string = '';
+  private prevSessionKey: string = '';
+  private lastVisibleChatIndex: number = -1;
+  private autoFollowPinnedUntil: number = 0;
+  private inlineImageCache = new Map<string, image.PixelMap | null>();
+  private inlineImageLoading = new Set<string>();
+  private inlineImageFailed = new Set<string>();
   // 获取对象
   markdownController: MarkdownController = new MarkdownController()
 
@@ -119,6 +167,7 @@ export struct ChatTabScreen {
   /** Tab remount / layout: list may not be ready on first frame; retry a few times. */
   private scheduleScrollChatListToEnd(): void {
     const delays: number[] = [0, 80, 200, 450];
+    this.pinAutoFollow(false);
     for (let i = 0; i < delays.length; i++) {
       const d = delays[i];
       setTimeout(() => {
@@ -133,6 +182,7 @@ export struct ChatTabScreen {
     if (total <= 0 || lastIdx < 0 || lastIdx >= total) {
       return;
     }
+    this.pinAutoFollow(animate);
     try {
       this.listScroller.scrollToIndex(lastIdx, animate, ScrollAlign.END);
     } catch {
@@ -142,18 +192,35 @@ export struct ChatTabScreen {
 
   aboutToUpdate(): void {
     const s = this.chatState;
+    if (s.sessionKey !== this.prevSessionKey) {
+      this.prevSessionKey = s.sessionKey;
+      this.lastVisibleChatIndex = -1;
+      this.pinAutoFollow(false);
+    }
     const vlen = this.visibleChatMessages().length;
     const streamLen = s.streamingAssistantText?.length ?? 0;
     const toolLen = s.pendingToolCalls.length;
-    const key = `${s.sessionKey}-${s.messages.length}-${vlen}-${s.pendingRunCount}-${streamLen}-${toolLen}`;
-    if (key !== this.prevScrollKey) {
-      this.prevScrollKey = key;
-      const total = this.getChatListItemCount();
-      const lastIdx = this.getChatListLastIndex();
-      if (total > 0 && lastIdx >= 0 && lastIdx < total) {
+    const structureKey = `${s.sessionKey}-${s.messages.length}-${vlen}-${s.pendingRunCount}-${toolLen}`;
+    if (structureKey !== this.prevStructureScrollKey) {
+      this.prevStructureScrollKey = structureKey;
+      if (this.shouldAutoFollowChat) {
+        const total = this.getChatListItemCount();
+        const lastIdx = this.getChatListLastIndex();
+        if (total > 0 && lastIdx >= 0 && lastIdx < total) {
+          setTimeout(() => {
+            this.scrollChatListToEnd(true);
+          }, 150);
+        }
+      }
+    }
+
+    const streamKey = `${s.sessionKey}-${streamLen}`;
+    if (streamKey !== this.prevStreamScrollKey) {
+      this.prevStreamScrollKey = streamKey;
+      if (streamLen > 0 && this.shouldAutoFollowChat) {
         setTimeout(() => {
-          this.scrollChatListToEnd(true);
-        }, 150);
+          this.scrollChatListToEnd(false);
+        }, 0);
       }
     }
   }
@@ -172,30 +239,51 @@ export struct ChatTabScreen {
   aboutToAppear(): void {
     this.attachChatListener();
     this.scheduleScrollChatListToEnd();
-    this.markdownController.setTextSize(12)
+    this.markdownController.setTextSize(12);
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    } catch {
+      // best-effort
+    }
+  }
+
+  aboutToDisappear(): void {
+    const chat = this.nodeRuntime.getChatController();
+    if (chat && this.chatListenerId >= 0) {
+      chat.removeListener(this.chatListenerId);
+      this.chatListenerId = -1;
+    }
+    this.closeImagePreview();
+    this.releaseAllInlineImages();
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
+    } catch {
+      // best-effort
+    }
   }
 
   private attachChatListener(): void {
     const chat = this.nodeRuntime.getChatController();
-    if (chat) {
-      chat.setListener((state) => {
-        const next: ChatTabState = {
-          messages: state.messages,
-          errorText: state.errorText,
-          healthOk: state.healthOk,
-          streamingAssistantText: state.streamingAssistantText,
-          pendingRunCount: state.pendingRunCount,
-          sessionKey: state.sessionKey,
-          mainSessionKey: state.mainSessionKey,
-          thinkingLevel: state.thinkingLevel,
-          sessions: state.sessions,
-          pendingToolCalls: state.pendingToolCalls,
-        };
-        setTimeout(() => {
-          this.chatState = next;
-        }, 0);
-      });
+    if (!chat || this.chatListenerId >= 0) {
+      return;
     }
+    this.chatListenerId = chat.addListener((state) => {
+      const next: ChatTabState = {
+        messages: state.messages,
+        errorText: state.errorText,
+        healthOk: state.healthOk,
+        streamingAssistantText: state.streamingAssistantText,
+        pendingRunCount: state.pendingRunCount,
+        sessionKey: state.sessionKey,
+        mainSessionKey: state.mainSessionKey,
+        thinkingLevel: state.thinkingLevel,
+        sessions: state.sessions,
+        pendingToolCalls: state.pendingToolCalls,
+      };
+      setTimeout(() => {
+        this.chatState = next;
+      }, 0);
+    });
   }
 
   private sessionChipRows(): ChatSessionEntry[] {
@@ -204,6 +292,222 @@ export struct ChatTabScreen {
       this.chatState.sessions,
       this.chatState.mainSessionKey,
     );
+  }
+
+  private currentSessionEntry(): ChatSessionEntry | null {
+    for (let i = 0; i < this.chatState.sessions.length; i++) {
+      const entry = this.chatState.sessions[i];
+      if (entry.key === this.chatState.sessionKey) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  private currentSessionTitle(): string {
+    const entry = this.currentSessionEntry();
+    if (entry) {
+      return friendlyChipLabel(entry);
+    }
+    const key = this.chatState.sessionKey.trim();
+    return friendlySessionKeyLabel(key.length > 0 ? key : 'main');
+  }
+
+  @Builder
+  ChatHeader() {
+    Column({ space: 0 }) {
+      Row() {
+        if (this.showBackButton !== false) {
+          Button() {
+            Row({ space: 4 }) {
+              Text('‹')
+                .fontSize(20)
+                .fontWeight(FontWeight.Bold)
+                .fontColor('#17181C')
+              Text(this.resStr($r('app.string.chat_back')))
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#17181C')
+            }
+            .alignItems(VerticalAlign.Center)
+          }
+          .backgroundColor('#00000000')
+          .borderRadius(999)
+          .height(36)
+          .padding({ left: 2, right: 8 })
+          .onClick(() => {
+            try {
+              HMRouterMgr.pop();
+            } catch {
+              // best-effort
+            }
+          })
+        }
+
+        Column() {
+          Text(this.currentSessionTitle())
+            .fontSize(17)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#17181C')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .padding({ left: this.showBackButton !== false ? 8 : 0, right: 10 })
+        .alignItems(HorizontalAlign.Start)
+
+        Row() {
+          Text((this.chatState.healthOk || this.isConnected) ? $r('app.string.status_connected') : $r('app.string.status_offline'))
+            .fontSize(11)
+            .fontWeight(FontWeight.Medium)
+            .fontColor((this.chatState.healthOk || this.isConnected) ? '#2F8C5A' : '#C8841A')
+        }
+        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .backgroundColor((this.chatState.healthOk || this.isConnected) ? '#E8F5E9' : '#FFF8E8')
+        .borderRadius(999)
+        .border({ width: 1, color: (this.chatState.healthOk || this.isConnected) ? '#CDE8D2' : '#F1D9A8' })
+      }
+      .width('100%')
+      .height(52)
+      .padding({ left: 12, right: 12 })
+      .alignItems(VerticalAlign.Center)
+      .justifyContent(FlexAlign.SpaceBetween)
+
+      Row()
+        .width('100%')
+        .height(1)
+        .backgroundColor('#E9EDF3')
+    }
+    .width('100%')
+    .backgroundColor('#FFFFFF')
+  }
+
+  private toolLabel(name: string): string {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      return 'Tool';
+    }
+    return titleCaseWords(trimmed);
+  }
+
+  private toolIcon(name: string): string {
+    const key = name.trim().toLowerCase();
+    if (key.includes('read')) return '📖';
+    if (key.includes('write') || key.includes('edit')) return '✍';
+    if (key.includes('search') || key.includes('find')) return '🔎';
+    if (key.includes('fetch') || key.includes('open')) return '🌐';
+    if (key.includes('image') || key.includes('screenshot') || key.includes('camera')) return '🖼';
+    if (key.includes('notify')) return '🔔';
+    if (key.includes('location') || key.includes('map')) return '📍';
+    if (key.includes('run') || key.includes('exec') || key.includes('command')) return '⌘';
+    return '🧩';
+  }
+
+  private renderToolArgValue(value: object | string | number | boolean | null): string | null {
+    if (value === null) {
+      return null;
+    }
+    if (typeof value === 'string') {
+      const singleLine = value.replace(/\s+/g, ' ').trim();
+      if (singleLine.length === 0) {
+        return null;
+      }
+      return singleLine.length > 160 ? `${singleLine.slice(0, 157)}…` : singleLine;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    if (Array.isArray(value)) {
+      const out: string[] = [];
+      for (let i = 0; i < value.length && out.length < 3; i++) {
+        const rendered = this.renderToolArgValue(value[i] as object | string | number | boolean | null);
+        if (rendered && rendered.length > 0) {
+          out.push(rendered);
+        }
+      }
+      if (out.length === 0) {
+        return null;
+      }
+      return out.join(', ');
+    }
+    const record = value as Record<string, object | string | number | boolean | null>;
+    const keys = Object.keys(record);
+    for (let i = 0; i < keys.length; i++) {
+      const rendered = this.renderToolArgValue(record[keys[i]]);
+      if (rendered && rendered.length > 0) {
+        return rendered;
+      }
+    }
+    return null;
+  }
+
+  private toolArgPath(args: Record<string, object | string | number | boolean | null> | null, keyPath: string): string | null {
+    if (!args) {
+      return null;
+    }
+    const parts = keyPath.split('.');
+    let current: object | string | number | boolean | null = args;
+    for (let i = 0; i < parts.length; i++) {
+      if (current === null || typeof current !== 'object' || Array.isArray(current)) {
+        return null;
+      }
+      const record = current as Record<string, object | string | number | boolean | null>;
+      current = record[parts[i]] ?? null;
+    }
+    return this.renderToolArgValue(current);
+  }
+
+  private firstToolDetail(args: Record<string, object | string | number | boolean | null> | null, keys: string[]): string | null {
+    for (let i = 0; i < keys.length; i++) {
+      const rendered = this.toolArgPath(args, keys[i]);
+      if (rendered && rendered.length > 0) {
+        return rendered;
+      }
+    }
+    return null;
+  }
+
+  private toolSummary(tc: ChatPendingToolCall): ToolSummaryRow {
+    const name = tc.name.trim();
+    const key = name.toLowerCase();
+    let detail = this.firstToolDetail(tc.args, [
+      'path',
+      'url',
+      'query',
+      'text',
+      'prompt',
+      'message',
+      'title',
+      'name',
+      'location',
+      'fileName',
+      'subject',
+    ]);
+    if (key === 'read') {
+      const path = this.toolArgPath(tc.args, 'path');
+      const offset = this.toolArgPath(tc.args, 'offset');
+      const limit = this.toolArgPath(tc.args, 'limit');
+      if (path && offset && limit) {
+        detail = `${path}:${offset}-${limit}`;
+      } else if (path) {
+        detail = path;
+      }
+    }
+    if (detail === null) {
+      detail = this.firstToolDetail(tc.args, [
+        'args.path',
+        'args.url',
+        'args.query',
+        'args.location',
+        'args.text',
+        'args.message',
+      ]);
+    }
+    return {
+      icon: this.toolIcon(name),
+      label: this.toolLabel(name),
+      detailLine: detail,
+    };
   }
 
   private filterDisplayableParts(parts: ChatMessageContent[]): ChatMessageContent[] {
@@ -270,27 +574,77 @@ export struct ChatTabScreen {
   }
 
   private canSendChat(): boolean {
-    const online = this.chatState.healthOk || this.isConnected;
+    const online = this.chatState.healthOk;
     const hasContent = this.inputText.trim().length > 0 || this.pendingAttachments.length > 0;
     return online && this.chatState.pendingRunCount === 0 && hasContent;
   }
 
-  private canSendInputOnly(): boolean {
-    const online = this.chatState.healthOk || this.isConnected;
-    return online && this.chatState.pendingRunCount === 0 && this.inputText.trim().length > 0;
+  private hasComposerContent(): boolean {
+    return this.inputText.trim().length > 0 || this.pendingAttachments.length > 0;
+  }
+
+  private pinAutoFollow(animate: boolean): void {
+    this.shouldAutoFollowChat = true;
+    this.showJumpToLatest = false;
+    this.autoFollowPinnedUntil = Date.now() + (animate ? 480 : 180);
+  }
+
+  private isChatViewportNearEnd(endIndex: number): boolean {
+    const lastIdx = this.getChatListLastIndex();
+    if (lastIdx <= 0) {
+      return true;
+    }
+    return endIndex >= Math.max(0, lastIdx - 1);
+  }
+
+  private refreshAutoFollowState(endIndex?: number): void {
+    if (this.composerFocused) {
+      this.shouldAutoFollowChat = true;
+      this.showJumpToLatest = false;
+      return;
+    }
+    if (typeof endIndex === 'number' && endIndex >= 0) {
+      this.lastVisibleChatIndex = endIndex;
+    }
+    let nearEnd = this.isChatViewportNearEnd(this.lastVisibleChatIndex);
+    try {
+      if (this.listScroller.isAtEnd()) {
+        nearEnd = true;
+      }
+    } catch {
+      // List may not be attached yet.
+    }
+    if (nearEnd) {
+      this.shouldAutoFollowChat = true;
+      this.showJumpToLatest = false;
+      return;
+    }
+    if (Date.now() < this.autoFollowPinnedUntil) {
+      return;
+    }
+    this.shouldAutoFollowChat = false;
+    this.showJumpToLatest = true;
+  }
+
+  private clearPendingAttachmentPreviews(): void {
+    for (let i = 0; i < this.pendingAttachments.length; i++) {
+      this.releaseInlineImage(this.attachmentPreviewKey(this.pendingAttachments[i]));
+    }
   }
 
   private sendCurrentMessage(): void {
     const text = this.inputText.trim();
     const hasAtt = this.pendingAttachments.length > 0;
-    if (!text && !hasAtt) {
+    if ((!text && !hasAtt) || !this.canSendChat()) {
       return;
     }
     const c = this.nodeRuntime.getChatController();
     if (c) {
+      this.pinAutoFollow(false);
       const outgoing = hasAtt ? toOutgoingImageAttachments(this.pendingAttachments) : undefined;
       void c.sendMessage(text, this.chatState.thinkingLevel, outgoing);
       this.inputText = '';
+      this.clearPendingAttachmentPreviews();
       this.pendingAttachments = [];
       this.plusMenuVisible = false;
     }
@@ -306,6 +660,160 @@ export struct ChatTabScreen {
     this.pendingAttachments = next;
   }
 
+  private inlineImageKey(messageId: string, part: ChatMessageContent, index: number): string {
+    const name = (part.fileName ?? '').trim();
+    const mime = (part.mimeType ?? '').trim().toLowerCase();
+    return `${messageId}:${index}:${mime}:${name}`;
+  }
+
+  private attachmentPreviewKey(att: ChatPendingAttachment): string {
+    return `pending:${att.id}`;
+  }
+
+  private releaseInlineImage(key: string): void {
+    const pixelMap = this.inlineImageCache.get(key);
+    if (pixelMap) {
+      try {
+        pixelMap.release();
+      } catch {
+        // ignore
+      }
+    }
+    this.inlineImageCache.delete(key);
+    this.inlineImageLoading.delete(key);
+    this.inlineImageFailed.delete(key);
+  }
+
+  private releaseAllInlineImages(): void {
+    const keys = Array.from(this.inlineImageCache.keys());
+    for (let i = 0; i < keys.length; i++) {
+      this.releaseInlineImage(keys[i]);
+    }
+    this.inlineImageLoading.clear();
+    this.inlineImageFailed.clear();
+  }
+
+  private base64ToArrayBuffer(base64: string): ArrayBuffer | null {
+    const text = (base64 ?? '').trim();
+    if (text.length === 0) {
+      return null;
+    }
+    try {
+      const helper = new util.Base64Helper();
+      const decoded = helper.decodeSync(text);
+      const copy = new Uint8Array(decoded.length);
+      copy.set(decoded);
+      return copy.buffer;
+    } catch {
+      return null;
+    }
+  }
+
+  private async decodeInlineImage(base64: string): Promise<image.PixelMap | null> {
+    const raw = this.base64ToArrayBuffer(base64);
+    if (!raw) {
+      return null;
+    }
+    let src: image.ImageSource | null = null;
+    try {
+      src = image.createImageSource(raw);
+      const info = await src.getImageInfo();
+      const w = info.size.width;
+      const h = info.size.height;
+      if (w <= 0 || h <= 0) {
+        return null;
+      }
+      const longEdge = Math.max(w, h);
+      let targetWidth = w;
+      let targetHeight = h;
+      if (longEdge > CHAT_INLINE_IMAGE_MAX_EDGE) {
+        const scale = CHAT_INLINE_IMAGE_MAX_EDGE / longEdge;
+        targetWidth = Math.max(1, Math.floor(w * scale));
+        targetHeight = Math.max(1, Math.floor(h * scale));
+      }
+      return await src.createPixelMap({
+        desiredSize: {
+          width: targetWidth,
+          height: targetHeight,
+        },
+      });
+    } catch {
+      return null;
+    } finally {
+      if (src) {
+        try {
+          src.release();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  private ensureInlineImageLoaded(cacheKey: string, base64: string): void {
+    if (this.inlineImageCache.has(cacheKey) || this.inlineImageLoading.has(cacheKey) || this.inlineImageFailed.has(cacheKey)) {
+      return;
+    }
+    this.inlineImageLoading.add(cacheKey);
+    void this.decodeInlineImage(base64).then((pixelMap) => {
+      this.inlineImageLoading.delete(cacheKey);
+      if (pixelMap) {
+        const prev = this.inlineImageCache.get(cacheKey);
+        if (prev && prev !== pixelMap) {
+          try {
+            prev.release();
+          } catch {
+            // ignore
+          }
+        }
+        this.inlineImageCache.set(cacheKey, pixelMap);
+        this.inlineImageFailed.delete(cacheKey);
+      } else {
+        this.inlineImageCache.delete(cacheKey);
+        this.inlineImageFailed.add(cacheKey);
+      }
+      this.inlineImageVersion += 1;
+    }).catch(() => {
+      this.inlineImageLoading.delete(cacheKey);
+      this.inlineImageCache.delete(cacheKey);
+      this.inlineImageFailed.add(cacheKey);
+      this.inlineImageVersion += 1;
+    });
+  }
+
+  private imagePreviewLabel(part: ChatMessageContent): string {
+    const fn = (part.fileName ?? '').trim();
+    if (fn.length > 0) {
+      return fn;
+    }
+    return this.resStr($r('app.string.chat_attachment_image'));
+  }
+
+  private hasInlineImagePreview(cacheKey: string): boolean {
+    return this.inlineImageCache.has(cacheKey) && this.inlineImageCache.get(cacheKey) !== null;
+  }
+
+  private inlineImagePreview(cacheKey: string): image.PixelMap | null {
+    return this.inlineImageCache.get(cacheKey) ?? null;
+  }
+
+  private openImagePreview(cacheKey: string, title: string): void {
+    if (!this.hasInlineImagePreview(cacheKey)) {
+      return;
+    }
+    this.previewImageKey = cacheKey;
+    this.previewImageTitle = title;
+  }
+
+  private closeImagePreview(): void {
+    this.previewImageKey = '';
+    this.previewImageTitle = '';
+  }
+
+  private isPreviewVisible(): boolean {
+    return this.previewImageKey.length > 0 && this.hasInlineImagePreview(this.previewImageKey);
+  }
+
   private imagePartCaption(part: ChatMessageContent): string {
     const fn = (part.fileName ?? '').trim();
     const base = this.resStr($r('app.string.chat_attachment_image'));
@@ -316,13 +824,49 @@ export struct ChatTabScreen {
   }
 
   @Builder
-  MessagePartLine(_msg: ChatMessage, part: ChatMessageContent, index: number) {
+  MessagePartLine(msg: ChatMessage, part: ChatMessageContent, index: number) {
     if ((part.type ?? 'text').trim() === 'text' && (part.text ?? '').trim().length > 0) {
       Markdown({ text: part.text ?? ' ', mode: 'text', controller: this.markdownController })
     } else if ((part.base64 ?? '').trim().length > 0) {
-      Text(this.imagePartCaption(part))
-        .fontSize(14)
-        .fontColor('#4D5563')
+      Column({ space: 6 }) {
+        if (this.hasInlineImagePreview(this.inlineImageKey(msg.id, part, index))) {
+          Image(this.inlineImagePreview(this.inlineImageKey(msg.id, part, index)))
+            .width('100%')
+            .constraintSize({ minHeight: 96, maxHeight: CHAT_INLINE_IMAGE_MAX_HEIGHT })
+            .borderRadius(10)
+            .objectFit(ImageFit.Contain)
+            .backgroundColor('#F6F7FA')
+            .onClick(() => {
+              this.openImagePreview(this.inlineImageKey(msg.id, part, index), this.imagePreviewLabel(part));
+            })
+        } else {
+          Row({ space: 6 }) {
+            Text('▣')
+              .fontSize(14)
+              .fontColor('#8A92A2')
+            Text(this.imagePartCaption(part))
+              .fontSize(13)
+              .fontColor('#4D5563')
+              .layoutWeight(1)
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+          .backgroundColor('#F6F7FA')
+          .borderRadius(10)
+        }
+
+        Text(this.imagePreviewLabel(part))
+          .fontSize(12)
+          .fontColor('#6B7280')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+      .onAppear(() => {
+        this.ensureInlineImageLoaded(this.inlineImageKey(msg.id, part, index), part.base64 ?? '');
+      })
     }
   }
 
@@ -379,9 +923,19 @@ export struct ChatTabScreen {
           .fontSize(12)
           .fontColor('#8A92A2')
         ForEach(calls, (tc: ChatPendingToolCall) => {
-          Text(`· ${tc.name}`)
-            .fontSize(13)
-            .fontColor('#4D5563')
+          Column({ space: 2 }) {
+            Text(`${this.toolSummary(tc).icon} ${this.toolSummary(tc).label}`)
+              .fontSize(13)
+              .fontColor('#4D5563')
+            if (this.toolSummary(tc).detailLine) {
+              Text(this.toolSummary(tc).detailLine ?? '')
+                .fontSize(11)
+                .fontColor('#8A92A2')
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+          }
+          .alignItems(HorizontalAlign.Start)
         }, (tc: ChatPendingToolCall) => tc.toolCallId)
       }
       .width('90%')
@@ -398,12 +952,41 @@ export struct ChatTabScreen {
   @Builder
   PendingAttachmentChip(att: ChatPendingAttachment) {
     Row({ space: 8 }) {
-      Text(att.fileName)
-        .fontSize(12)
-        .fontColor('#17181C')
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .layoutWeight(1)
+      if (this.hasInlineImagePreview(this.attachmentPreviewKey(att))) {
+        Image(this.inlineImagePreview(this.attachmentPreviewKey(att)))
+          .width(44)
+          .height(44)
+          .borderRadius(10)
+          .objectFit(ImageFit.Cover)
+          .backgroundColor('#F6F7FA')
+          .onClick(() => {
+            this.openImagePreview(this.attachmentPreviewKey(att), att.fileName);
+          })
+      } else {
+        Row() {
+          Text('▣')
+            .fontSize(16)
+            .fontColor('#8A92A2')
+        }
+        .width(44)
+        .height(44)
+        .borderRadius(10)
+        .backgroundColor('#F6F7FA')
+        .justifyContent(FlexAlign.Center)
+      }
+
+      Column({ space: 2 }) {
+        Text(att.fileName)
+          .fontSize(12)
+          .fontColor('#17181C')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(this.resStr($r('app.string.chat_attachment_image')))
+          .fontSize(10)
+          .fontColor('#6B7280')
+      }
+      .layoutWeight(1)
+
       Button('×')
         .fontSize(16)
         .fontWeight(FontWeight.Medium)
@@ -415,14 +998,18 @@ export struct ChatTabScreen {
         .width(28)
         .padding(0)
         .onClick(() => {
+          this.releaseInlineImage(this.attachmentPreviewKey(att));
           this.removePendingAttachment(att.id);
         })
     }
     .padding({ left: 10, right: 8, top: 6, bottom: 6 })
-    .constraintSize({ minWidth: 120, maxWidth: 220 })
+    .constraintSize({ minWidth: 180, maxWidth: 240 })
     .backgroundColor('#ECF3FF')
-    .borderRadius(999)
+    .borderRadius(16)
     .border({ width: 1, color: '#D6DAE2' })
+    .onAppear(() => {
+      this.ensureInlineImageLoaded(this.attachmentPreviewKey(att), att.base64);
+    })
   }
 
   @Builder
@@ -443,343 +1030,381 @@ export struct ChatTabScreen {
       })
   }
 
-  build() {
-    Column({ space: 4 }) {
-      // Detail page custom navigation bar.
-      Column({ space: 0 }) {
-        Row() {
-          Button($r('app.string.chat_back'))
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .backgroundColor('#FFFFFF')
-            .fontColor('#4D5563')
-            .borderRadius(14)
-            .border({ width: 1, color: '#D6DAE2' })
-            .height(40)
-            .width(88)
-            .onClick(() => {
-              try {
-                HMRouterMgr.pop();
-              } catch {
-                // best-effort
-              }
-            })
-
-          Column() {
-            Text(friendlySessionKeyLabel(this.chatState.sessionKey))
-              .fontSize(14)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#17181C')
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text($r('app.string.chat_session_label'))
-              .fontSize(11)
-              .fontWeight(FontWeight.Medium)
-              .fontColor('#4D5563')
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-          .layoutWeight(1)
-          .padding({ left: 10, right: 10 })
-
-          Row() {
-            Text((this.chatState.healthOk || this.isConnected) ? $r('app.string.status_connected') : $r('app.string.status_offline'))
-              .fontSize(11)
-              .fontWeight(FontWeight.Medium)
-              .fontColor((this.chatState.healthOk || this.isConnected) ? '#2F8C5A' : '#C8841A')
-          }
-          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-          .backgroundColor((this.chatState.healthOk || this.isConnected) ? '#E8F5E9' : '#FFF8E8')
-          .borderRadius(999)
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Center)
-        .justifyContent(FlexAlign.SpaceBetween)
-
-        // Temporarily hide thinking level controls in chat detail top bar.
-        Row()
-          .width('100%')
-          .height(0)
-          .visibility(Visibility.None)
-      }
-      .width('100%')
-      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-      .backgroundColor('#FFFFFF')
-      .borderRadius(16)
-      .border({ width: 1, color: '#E5E7EC' })
-
-      if (this.chatState.errorText) {
-        Column({ space: 2 }) {
-          Text($r('app.string.chat_error_header'))
-            .fontSize(10)
-            .fontColor('#dc3545')
-          Text(this.chatState.errorText)
-            .fontSize(12)
-            .fontColor('#17181C')
-            .maxLines(3)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .width('100%')
-        .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-        .backgroundColor('#FFFFFF')
-        .borderRadius(10)
-        .border({ width: 1, color: '#dc3545' })
-        .alignItems(HorizontalAlign.Start)
-      }
-
-      List({ scroller: this.listScroller, initialIndex: this.getChatListLastIndex(), space: 8 }) {
-        if (!this.chatState.healthOk && this.chatState.messages.length === 0) {
-          ListItem() {
-            Column({ space: 4 }) {
-              Text($r('app.string.chat_no_messages_yet'))
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#17181C')
-              Text($r('app.string.chat_connect_first_hint'))
-                .fontSize(14)
-                .fontColor('#4D5563')
-            }
-            .width('100%')
-            .padding(12)
-            .backgroundColor('#FFFFFF')
-            .borderRadius(14)
-            .border({ width: 1, color: '#E5E7EC' })
-            .alignItems(HorizontalAlign.Start)
-          }
-        }
-        if (this.chatState.healthOk && this.chatState.messages.length === 0 &&
-          !this.chatState.streamingAssistantText && this.chatState.pendingRunCount === 0 &&
-          this.chatState.pendingToolCalls.length === 0) {
-          ListItem() {
-            Column({ space: 4 }) {
-              Text($r('app.string.chat_no_messages_yet'))
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#17181C')
-              Text($r('app.string.chat_send_first_prompt'))
-                .fontSize(14)
-                .fontColor('#4D5563')
-            }
-            .width('100%')
-            .padding(12)
-            .backgroundColor('#FFFFFF')
-            .borderRadius(14)
-            .border({ width: 1, color: '#E5E7EC' })
-            .alignItems(HorizontalAlign.Start)
-          }
-        }
-        ForEach(this.visibleChatMessages(), (msg: ChatMessage) => {
-          ListItem() {
-            this.MessageBubble(msg, msg.role.trim().toLowerCase() === 'user')
-          }
-        }, (msg: ChatMessage) => msg.id)
-        if (this.chatState.pendingToolCalls.length > 0) {
-          ListItem() {
-            this.PendingToolsBubble(this.chatState.pendingToolCalls)
-          }
-        }
-        if (this.chatState.streamingAssistantText) {
-          ListItem() {
-            Row() {
-              Column({ space: 3 }) {
-                Text($r('app.string.chat_stream_live'))
-                  .fontSize(11)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor('#1D5DD8')
-                Markdown({ text: this.chatState.streamingAssistantText || ' ', mode: 'text' })
-              }
-              .width('90%')
-              .padding({ left: 11, right: 11, top: 8, bottom: 8 })
-              .backgroundColor('#FFFFFF')
-              .borderRadius(12)
-              .border({ width: 1, color: '#1D5DD8' })
-              .alignItems(HorizontalAlign.Start)
-            }
-            .width('100%')
-            .justifyContent(FlexAlign.Start)
-          }
-        }
-        if (this.chatState.pendingRunCount > 0 && !this.chatState.streamingAssistantText) {
-          ListItem() {
-            Row() {
-              Column({ space: 3 }) {
-                Text('ASSISTANT')
-                  .fontSize(11)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor('#4D5563')
-                Row({ space: 5 }) {
-                  Text('●').fontSize(10).fontColor('#4D5563').opacity(0.4)
-                  Text('●').fontSize(10).fontColor('#4D5563').opacity(0.6)
-                  Text('●').fontSize(10).fontColor('#4D5563').opacity(0.9)
-                  Text($r('app.string.chat_thinking'))
-                    .fontSize(14)
-                    .fontColor('#4D5563')
-                }
-              }
-              .padding({ left: 11, right: 11, top: 8, bottom: 8 })
-              .backgroundColor('#FFFFFF')
-              .borderRadius(12)
-              .border({ width: 1, color: '#D6DAE2' })
-              .alignItems(HorizontalAlign.Start)
-            }
-            .width('100%')
-            .justifyContent(FlexAlign.Start)
-          }
-        }
-      }
-      .layoutWeight(1)
-      .divider({ strokeWidth: 0 })
-      .scrollBar(BarState.Off)
-      .padding({ bottom: 6 })
+  @Builder
+  JumpToLatestButton() {
+    Button($r('app.string.chat_jump_to_latest'))
+      .fontSize(12)
+      .fontWeight(FontWeight.Medium)
+      .fontColor('#FFFFFF')
+      .backgroundColor('#1D5DD8')
+      .borderRadius(999)
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .shadow({ radius: 12, color: '#3317181C', offsetX: 0, offsetY: 4 })
       .onClick(() => {
-        if (this.plusMenuVisible) {
-          this.plusMenuVisible = false;
-        }
+        this.scrollChatListToEnd(true);
       })
+  }
 
-      Column({ space: 4 }) {
-        if (this.pendingAttachments.length > 0) {
-          Scroll() {
-            Row({ space: 8 }) {
-              ForEach(this.pendingAttachments, (att: ChatPendingAttachment) => {
-                this.PendingAttachmentChip(att)
-              }, (att: ChatPendingAttachment) => att.id)
-            }
-          }
-          .scrollable(ScrollDirection.Horizontal)
-          .scrollBar(BarState.Off)
-          .width('100%')
-        }
-
-        if (this.plusMenuVisible) {
-          Row({ space: 6 }) {
-            Button($r('app.string.chat_attach'))
-              .fontSize(12)
-              .fontWeight(FontWeight.Medium)
-              .backgroundColor('#FFFFFF')
-              .fontColor(this.pendingAttachments.length < CHAT_ATTACHMENT_MAX_COUNT ? '#4D5563' : '#99A0AE')
-              .borderRadius(12)
-              .border({ width: 1, color: '#D6DAE2' })
-              .height(38)
-              .enabled(this.pendingAttachments.length < CHAT_ATTACHMENT_MAX_COUNT)
-              .onClick(() => {
-                const remain = CHAT_ATTACHMENT_MAX_COUNT - this.pendingAttachments.length;
-                if (remain <= 0) {
-                  try {
-                    promptAction.showToast({ message: this.resStr($r('app.string.chat_attach_limit')) });
-                  } catch {
-                    // ignore
-                  }
-                  return;
-                }
-                const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
-                void pickAndEncodeChatImages(ctx ?? null, remain).then((list: ChatPendingAttachment[]) => {
-                  if (list.length === 0) {
-                    return;
-                  }
-                  const next: ChatPendingAttachment[] = [];
-                  for (let i = 0; i < this.pendingAttachments.length; i++) {
-                    next.push(this.pendingAttachments[i]);
-                  }
-                  for (let j = 0; j < list.length; j++) {
-                    next.push(list[j]);
-                  }
-                  this.pendingAttachments = next;
-                }).catch(() => {
-                  try {
-                    promptAction.showToast({ message: this.resStr($r('app.string.chat_attach_failed')) });
-                  } catch {
-                    // ignore
-                  }
-                });
-                this.plusMenuVisible = false;
-              })
-            Button($r('app.string.chat_refresh'))
-              .fontSize(12)
-              .fontWeight(FontWeight.Medium)
-              .backgroundColor('#FFFFFF')
-              .fontColor('#4D5563')
-              .borderRadius(12)
-              .border({ width: 1, color: '#D6DAE2' })
-              .height(38)
-              .onClick(() => {
-                const c = this.nodeRuntime.getChatController();
-                if (c) {
-                  void c.bootstrap({ sessionLimit: 200 });
-                }
-                this.plusMenuVisible = false;
-              })
-            Button($r('app.string.chat_abort'))
-              .fontSize(12)
-              .fontWeight(FontWeight.Medium)
-              .backgroundColor('#FFFFFF')
-              .fontColor(this.chatState.pendingRunCount > 0 ? '#4D5563' : '#99A0AE')
-              .borderRadius(12)
-              .border({ width: 1, color: '#D6DAE2' })
-              .height(38)
-              .enabled(this.chatState.pendingRunCount > 0)
-              .onClick(() => {
-                this.nodeRuntime.getChatController()?.abort();
-                this.plusMenuVisible = false;
-              })
-          }
-          .width('100%')
-        }
-
-        Row({ space: 6 }) {
-          TextInput({
-            placeholder: $r('app.string.chat_input_placeholder'),
-            text: this.inputText
+  @Builder
+  ImagePreviewOverlay() {
+    Column({ space: 16 }) {
+      Row() {
+        Text(this.previewImageTitle)
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Button('×')
+          .width(36)
+          .height(36)
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .backgroundColor('#1F293799')
+          .borderRadius(999)
+          .padding(0)
+          .onClick(() => {
+            this.closeImagePreview();
           })
-            .onChange((v) => {
-              this.inputText = v;
-              if (v.trim().length > 0 && this.plusMenuVisible) {
-                this.plusMenuVisible = false;
-              }
-            })
-            .layoutWeight(1)
-            .height(42)
-            .backgroundColor('#F6F7FA')
-            .borderRadius(12)
-            .border({ width: 1, color: '#E5E7EC' })
-
-          Button(this.inputText.trim().length > 0 ? $r('app.string.chat_send') : '+')
-            .height(42)
-            .width(58)
-            .fontSize(this.inputText.trim().length > 0 ? 12 : 20)
-            .fontWeight(FontWeight.Bold)
-            .backgroundColor(this.inputText.trim().length > 0 ? (this.canSendInputOnly() ? '#1D5DD8' : '#D6DAE2') : '#FFFFFF')
-            .fontColor(this.inputText.trim().length > 0 ? (this.canSendInputOnly() ? '#FFFFFF' : '#99A0AE') : '#4D5563')
-            .borderRadius(12)
-            .border({ width: 1, color: this.inputText.trim().length > 0 ? (this.canSendInputOnly() ? '#184DAF' : '#D6DAE2') : '#D6DAE2' })
-            .enabled(this.inputText.trim().length > 0 ? this.canSendInputOnly() : true)
-            .onClick(() => {
-              if (this.inputText.trim().length > 0) {
-                this.sendCurrentMessage();
-                return;
-              }
-              this.plusMenuVisible = !this.plusMenuVisible;
-            })
-        }
-        .width('100%')
-
-        if (!this.chatState.healthOk) {
-          Text($r('app.string.chat_gateway_offline_hint'))
-            .fontSize(11)
-            .fontColor('#C8841A')
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-
       }
       .width('100%')
-      .alignItems(HorizontalAlign.Start)
+      .alignItems(VerticalAlign.Center)
+
+      if (this.isPreviewVisible()) {
+        Image(this.inlineImagePreview(this.previewImageKey))
+          .width('100%')
+          .layoutWeight(1)
+          .objectFit(ImageFit.Contain)
+          .borderRadius(14)
+      }
     }
     .width('100%')
     .height('100%')
-    .padding({ left: 12, right: 12, top: 6, bottom: 8 })
-    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 16, right: 16, top: 20, bottom: 20 })
+    .backgroundColor('#CC0B1220')
     .justifyContent(FlexAlign.Start)
-    .backgroundColor('#F7F8FA')
+    .onClick(() => {
+      this.closeImagePreview();
+    })
+  }
+
+  build() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column({ space: 0 }) {
+        this.ChatHeader()
+
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          Column({ space: 4 }) {
+            if (this.chatState.errorText) {
+              Column({ space: 2 }) {
+                Text($r('app.string.chat_error_header'))
+                  .fontSize(10)
+                  .fontColor('#dc3545')
+                Text(this.chatState.errorText)
+                  .fontSize(12)
+                  .fontColor('#17181C')
+                  .maxLines(3)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              .width('100%')
+              .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+              .backgroundColor('#FFFFFF')
+              .borderRadius(10)
+              .border({ width: 1, color: '#dc3545' })
+              .alignItems(HorizontalAlign.Start)
+            }
+
+            List({ scroller: this.listScroller, initialIndex: this.getChatListLastIndex(), space: 8 }) {
+              if (!this.chatState.healthOk && this.chatState.messages.length === 0) {
+                ListItem() {
+                  Column({ space: 4 }) {
+                    Text($r('app.string.chat_no_messages_yet'))
+                      .fontSize(16)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor('#17181C')
+                    Text($r('app.string.chat_connect_first_hint'))
+                      .fontSize(14)
+                      .fontColor('#4D5563')
+                  }
+                  .width('100%')
+                  .padding(12)
+                  .backgroundColor('#FFFFFF')
+                  .borderRadius(14)
+                  .border({ width: 1, color: '#E5E7EC' })
+                  .alignItems(HorizontalAlign.Start)
+                }
+              }
+              if (this.chatState.healthOk && this.chatState.messages.length === 0 &&
+                !this.chatState.streamingAssistantText && this.chatState.pendingRunCount === 0 &&
+                this.chatState.pendingToolCalls.length === 0) {
+                ListItem() {
+                  Column({ space: 4 }) {
+                    Text($r('app.string.chat_no_messages_yet'))
+                      .fontSize(16)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor('#17181C')
+                    Text($r('app.string.chat_send_first_prompt'))
+                      .fontSize(14)
+                      .fontColor('#4D5563')
+                  }
+                  .width('100%')
+                  .padding(12)
+                  .backgroundColor('#FFFFFF')
+                  .borderRadius(14)
+                  .border({ width: 1, color: '#E5E7EC' })
+                  .alignItems(HorizontalAlign.Start)
+                }
+              }
+              ForEach(this.visibleChatMessages(), (msg: ChatMessage) => {
+                ListItem() {
+                  this.MessageBubble(msg, msg.role.trim().toLowerCase() === 'user')
+                }
+              }, (msg: ChatMessage) => msg.id)
+              if (this.chatState.pendingToolCalls.length > 0) {
+                ListItem() {
+                  this.PendingToolsBubble(this.chatState.pendingToolCalls)
+                }
+              }
+              if (this.chatState.streamingAssistantText) {
+                ListItem() {
+                  Row() {
+                    Column({ space: 3 }) {
+                      Text($r('app.string.chat_stream_live'))
+                        .fontSize(11)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor('#1D5DD8')
+                      Markdown({ text: this.chatState.streamingAssistantText || ' ', mode: 'text' })
+                    }
+                    .width('90%')
+                    .padding({ left: 11, right: 11, top: 8, bottom: 8 })
+                    .backgroundColor('#FFFFFF')
+                    .borderRadius(12)
+                    .border({ width: 1, color: '#1D5DD8' })
+                    .alignItems(HorizontalAlign.Start)
+                  }
+                  .width('100%')
+                  .justifyContent(FlexAlign.Start)
+                }
+              }
+              if (this.chatState.pendingRunCount > 0 && !this.chatState.streamingAssistantText) {
+                ListItem() {
+                  Row() {
+                    Column({ space: 3 }) {
+                      Text(roleLabel('assistant'))
+                        .fontSize(11)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor('#4D5563')
+                      Row({ space: 5 }) {
+                        Text('●').fontSize(10).fontColor('#4D5563').opacity(0.4)
+                        Text('●').fontSize(10).fontColor('#4D5563').opacity(0.6)
+                        Text('●').fontSize(10).fontColor('#4D5563').opacity(0.9)
+                        Text($r('app.string.chat_thinking'))
+                          .fontSize(14)
+                          .fontColor('#4D5563')
+                      }
+                    }
+                    .padding({ left: 11, right: 11, top: 8, bottom: 8 })
+                    .backgroundColor('#FFFFFF')
+                    .borderRadius(12)
+                    .border({ width: 1, color: '#D6DAE2' })
+                    .alignItems(HorizontalAlign.Start)
+                  }
+                  .width('100%')
+                  .justifyContent(FlexAlign.Start)
+                }
+              }
+            }
+            .layoutWeight(1)
+            .divider({ strokeWidth: 0 })
+            .scrollBar(BarState.Off)
+            .padding({ bottom: 6 })
+            .onScrollIndex((start: number, end: number) => {
+              this.refreshAutoFollowState(end);
+            })
+            .onReachEnd(() => {
+              this.shouldAutoFollowChat = true;
+              this.showJumpToLatest = false;
+            })
+            .onClick(() => {
+              if (this.plusMenuVisible) {
+                this.plusMenuVisible = false;
+              }
+            })
+
+            Column({ space: 4 }) {
+              if (this.pendingAttachments.length > 0) {
+                Scroll() {
+                  Row({ space: 8 }) {
+                    ForEach(this.pendingAttachments, (att: ChatPendingAttachment) => {
+                      this.PendingAttachmentChip(att)
+                    }, (att: ChatPendingAttachment) => att.id)
+                  }
+                }
+                .scrollable(ScrollDirection.Horizontal)
+                .scrollBar(BarState.Off)
+                .width('100%')
+              }
+
+              if (this.plusMenuVisible) {
+                Row({ space: 6 }) {
+                  Button($r('app.string.chat_attach'))
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Medium)
+                    .backgroundColor('#FFFFFF')
+                    .fontColor(this.pendingAttachments.length < CHAT_ATTACHMENT_MAX_COUNT ? '#4D5563' : '#99A0AE')
+                    .borderRadius(12)
+                    .border({ width: 1, color: '#D6DAE2' })
+                    .height(38)
+                    .enabled(this.pendingAttachments.length < CHAT_ATTACHMENT_MAX_COUNT)
+                    .onClick(() => {
+                      const remain = CHAT_ATTACHMENT_MAX_COUNT - this.pendingAttachments.length;
+                      if (remain <= 0) {
+                        try {
+                          promptAction.showToast({ message: this.resStr($r('app.string.chat_attach_limit')) });
+                        } catch {
+                          // ignore
+                        }
+                        return;
+                      }
+                      const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+                      void pickAndEncodeChatImages(ctx ?? null, remain).then((list: ChatPendingAttachment[]) => {
+                        if (list.length === 0) {
+                          return;
+                        }
+                        const next: ChatPendingAttachment[] = [];
+                        for (let i = 0; i < this.pendingAttachments.length; i++) {
+                          next.push(this.pendingAttachments[i]);
+                        }
+                        for (let j = 0; j < list.length; j++) {
+                          next.push(list[j]);
+                        }
+                        this.pendingAttachments = next;
+                      }).catch(() => {
+                        try {
+                          promptAction.showToast({ message: this.resStr($r('app.string.chat_attach_failed')) });
+                        } catch {
+                          // ignore
+                        }
+                      });
+                      this.plusMenuVisible = false;
+                    })
+                  Button($r('app.string.chat_refresh'))
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Medium)
+                    .backgroundColor('#FFFFFF')
+                    .fontColor('#4D5563')
+                    .borderRadius(12)
+                    .border({ width: 1, color: '#D6DAE2' })
+                    .height(38)
+                    .onClick(() => {
+                      const c = this.nodeRuntime.getChatController();
+                      if (c) {
+                        void c.bootstrap({ sessionLimit: 200 });
+                      }
+                      this.plusMenuVisible = false;
+                    })
+                  Button($r('app.string.chat_abort'))
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Medium)
+                    .backgroundColor('#FFFFFF')
+                    .fontColor(this.chatState.pendingRunCount > 0 ? '#4D5563' : '#99A0AE')
+                    .borderRadius(12)
+                    .border({ width: 1, color: '#D6DAE2' })
+                    .height(38)
+                    .enabled(this.chatState.pendingRunCount > 0)
+                    .onClick(() => {
+                      this.nodeRuntime.getChatController()?.abort();
+                      this.plusMenuVisible = false;
+                    })
+                }
+                .width('100%')
+              }
+
+              Row({ space: 6 }) {
+                TextInput({
+                  placeholder: $r('app.string.chat_input_placeholder'),
+                  text: this.inputText
+                })
+                  .onChange((v) => {
+                    this.inputText = v;
+                    if (v.trim().length > 0 && this.plusMenuVisible) {
+                      this.plusMenuVisible = false;
+                    }
+                  })
+                  .onFocus(() => {
+                    this.composerFocused = true;
+                    this.scrollChatListToEnd(false);
+                  })
+                  .onBlur(() => {
+                    this.composerFocused = false;
+                  })
+                  .layoutWeight(1)
+                  .height(42)
+                  .backgroundColor('#F6F7FA')
+                  .borderRadius(12)
+                  .border({ width: 1, color: '#E5E7EC' })
+
+                Button(this.hasComposerContent() ? $r('app.string.chat_send') : '+')
+                  .height(42)
+                  .width(58)
+                  .fontSize(this.hasComposerContent() ? 12 : 20)
+                  .fontWeight(FontWeight.Bold)
+                  .backgroundColor(this.hasComposerContent() ? (this.canSendChat() ? '#1D5DD8' : '#D6DAE2') : '#FFFFFF')
+                  .fontColor(this.hasComposerContent() ? (this.canSendChat() ? '#FFFFFF' : '#99A0AE') : '#4D5563')
+                  .borderRadius(12)
+                  .border({ width: 1, color: this.hasComposerContent() ? (this.canSendChat() ? '#184DAF' : '#D6DAE2') : '#D6DAE2' })
+                  .enabled(this.hasComposerContent() ? this.canSendChat() : true)
+                  .onClick(() => {
+                    if (this.hasComposerContent()) {
+                      this.sendCurrentMessage();
+                      return;
+                    }
+                    this.plusMenuVisible = !this.plusMenuVisible;
+                  })
+              }
+              .width('100%')
+
+              if (!this.chatState.healthOk) {
+                Text($r('app.string.chat_gateway_offline_hint'))
+                  .fontSize(11)
+                  .fontColor('#C8841A')
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }
+          .width('100%')
+          .height('100%')
+          .padding({ left: 12, right: 12, top: 0, bottom: 8 })
+          .alignItems(HorizontalAlign.Start)
+          .justifyContent(FlexAlign.Start)
+          .backgroundColor('#F7F8FA')
+
+          if (this.showJumpToLatest) {
+            Column() {
+              this.JumpToLatestButton()
+            }
+            .padding({ right: 18, bottom: 94 })
+            .justifyContent(FlexAlign.End)
+            .alignItems(HorizontalAlign.End)
+            .hitTestBehavior(HitTestMode.None)
+          }
+        }
+        .layoutWeight(1)
+        .width('100%')
+      }
+      .width('100%')
+      .height('100%')
+
+      if (this.isPreviewVisible()) {
+        this.ImagePreviewOverlay()
+      }
+    }
+    .width('100%')
+    .height('100%')
   }
 }

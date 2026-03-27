@@ -373,6 +373,10 @@
       "value": "ASSISTANT · LIVE"
     },
     {
+      "name": "chat_jump_to_latest",
+      "value": "Jump to latest"
+    },
+    {
       "name": "chat_tools_label",
       "value": "TOOLS"
     },

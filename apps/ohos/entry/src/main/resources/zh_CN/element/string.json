@@ -373,6 +373,10 @@
       "value": "助手 · 实时"
     },
     {
+      "name": "chat_jump_to_latest",
+      "value": "回到最新"
+    },
+    {
       "name": "chat_tools_label",
       "value": "工具"
     },

@@ -20,6 +20,8 @@ export interface ChatSessionEntry {
   key: string;
   updatedAtMs?: number;
   displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
 }
 
 /** Local image queued in the composer before send (Android PendingImageAttachment). */

@@ -12,6 +12,7 @@ interface WebPageBeginPayload {
 export struct ScreenTabScreen {
   @Prop isConnected: boolean = false;
   @Prop statusText: string = '';
+  @Prop visible: boolean = true;
   @StorageLink('nodeRuntime') nodeRuntime: NodeRuntime = AppStorage.get<NodeRuntime>('nodeRuntime') as NodeRuntime;
   private webCtl: webview.WebviewController = new webview.WebviewController();
 
@@ -33,6 +34,7 @@ export struct ScreenTabScreen {
         .javaScriptAccess(true)
         .domStorageAccess(true)
         .onlineImageAccess(true)
+        .visibility(this.visible ? Visibility.Visible : Visibility.Hidden)
         .javaScriptProxy({
           object: this.nodeRuntime.getCanvasA2UIBridge(),
           name: 'openclawCanvasA2UIAction',

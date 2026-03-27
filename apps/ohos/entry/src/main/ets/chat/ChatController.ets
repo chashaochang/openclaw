@@ -89,6 +89,89 @@ export interface TalkSpeakRequest {
   persistentModelId: string | null;
 }
 
+function stringFingerprint(value: string | undefined): string {
+  const text = (value ?? '').trim();
+  if (text.length === 0) {
+    return '';
+  }
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash) + text.charCodeAt(i);
+  }
+  return String(hash >>> 0);
+}
+
+function messageIdentityKey(message: ChatMessage): string | null {
+  const role = (message.role ?? '').trim().toLowerCase();
+  if (role.length === 0) {
+    return null;
+  }
+  const timestamp = message.timestampMs !== undefined ? String(message.timestampMs) : '';
+  let contentFingerprint = '';
+  for (let i = 0; i < message.content.length; i++) {
+    const part = message.content[i];
+    const row = [
+      (part.type ?? '').trim().toLowerCase(),
+      (part.text ?? '').trim(),
+      (part.mimeType ?? '').trim().toLowerCase(),
+      (part.fileName ?? '').trim(),
+      stringFingerprint(part.base64),
+    ].join('\u001F');
+    contentFingerprint = contentFingerprint.length > 0 ? `${contentFingerprint}\u001E${row}` : row;
+  }
+  if (timestamp.length === 0 && contentFingerprint.length === 0) {
+    return null;
+  }
+  return [role, timestamp, contentFingerprint].join('|');
+}
+
+function reconcileMessageIds(previous: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  if (previous.length === 0 || incoming.length === 0) {
+    return incoming;
+  }
+  const idsByKey = new Map<string, string[]>();
+  for (let i = 0; i < previous.length; i++) {
+    const message = previous[i];
+    const key = messageIdentityKey(message);
+    if (!key) {
+      continue;
+    }
+    const bucket = idsByKey.get(key) ?? [];
+    bucket.push(message.id);
+    idsByKey.set(key, bucket);
+  }
+  const reconciled: ChatMessage[] = [];
+  for (let i = 0; i < incoming.length; i++) {
+    const message = incoming[i];
+    const key = messageIdentityKey(message);
+    if (!key) {
+      reconciled.push(message);
+      continue;
+    }
+    const bucket = idsByKey.get(key);
+    if (!bucket || bucket.length === 0) {
+      reconciled.push(message);
+      continue;
+    }
+    const reusedId = bucket.shift();
+    if (!reusedId || reusedId === message.id) {
+      reconciled.push(message);
+    } else {
+      reconciled.push({
+        id: reusedId,
+        role: message.role,
+        content: message.content,
+        timestampMs: message.timestampMs,
+      });
+    }
+    if (bucket.length === 0) {
+      idsByKey.delete(key);
+    } else {
+      idsByKey.set(key, bucket);
+    }
+  }
+  return reconciled;
+}
 
 function normalizeThinking(level: string): string {
   const t = (level ?? '').trim().toLowerCase();
@@ -98,7 +181,8 @@ function normalizeThinking(level: string): string {
 
 export class ChatController {
   private session: GatewaySession;
-  private listener: ChatStateListener | null = null;
+  private listeners = new Map<number, ChatStateListener>();
+  private nextListenerId = 1;
   private _sessionKey = 'main';
   private _mainSessionKey = 'main';
   private _messages: ChatMessage[] = [];
@@ -117,10 +201,24 @@ export class ChatController {
   }
 
   setListener(listener: ChatStateListener | null): void {
-    this.listener = listener;
-    if (listener) {
-      this.notify();
+    this.listeners.clear();
+    if (!listener) {
+      return;
     }
+    const id = this.nextListenerId++;
+    this.listeners.set(id, listener);
+    listener(this.snapshotState());
+  }
+
+  addListener(listener: ChatStateListener): number {
+    const id = this.nextListenerId++;
+    this.listeners.set(id, listener);
+    listener(this.snapshotState());
+    return id;
+  }
+
+  removeListener(listenerId: number): void {
+    this.listeners.delete(listenerId);
   }
 
   setThinkingLevel(level: string): void {
@@ -152,7 +250,14 @@ export class ChatController {
   }
 
   private notify(): void {
-    if (!this.listener) return;
+    if (this.listeners.size === 0) return;
+    const state = this.snapshotState();
+    this.listeners.forEach((listener) => {
+      listener(state);
+    });
+  }
+
+  private snapshotState(): ChatState {
     const state: ChatState = {
       sessionKey: this._sessionKey,
       mainSessionKey: this._mainSessionKey,
@@ -165,7 +270,7 @@ export class ChatController {
       sessions: this._sessions,
       pendingToolCalls: this._pendingToolCalls,
     };
-    this.listener(state);
+    return state;
   }
 
   onDisconnected(_message: string): void {
@@ -201,7 +306,7 @@ export class ChatController {
       await this.session.sendNodeEvent('chat.subscribe', JSON.stringify(subParams));
       const histRec: Record<string, string> = { 'sessionKey': key };
       const res = await this.session.request('chat.history', histRec, 15000);
-      const history = this.parseHistory(res.payloadJson, key);
+      const history = this.parseHistory(res.payloadJson, key, this._messages);
       this._messages = history.messages;
       const tl = history.thinkingLevel?.trim();
       if (tl && tl.length > 0) this._thinkingLevel = normalizeThinking(tl);
@@ -222,6 +327,8 @@ export class ChatController {
       const params: Record<string, string | number | boolean> = {
         'includeGlobal': true,
         'includeUnknown': false,
+        'includeDerivedTitles': true,
+        'includeLastMessage': true,
         'limit': limit,
       };
       const res = await this.session.request('sessions.list', params, 10000);
@@ -249,6 +356,8 @@ export class ChatController {
           key,
           updatedAtMs: updatedAtMs,
           displayName: typeof item['displayName'] === 'string' ? item['displayName'] : undefined,
+          derivedTitle: typeof item['derivedTitle'] === 'string' ? item['derivedTitle'] : undefined,
+          lastMessagePreview: typeof item['lastMessagePreview'] === 'string' ? item['lastMessagePreview'] : undefined,
         });
       }
       return out;
@@ -272,7 +381,7 @@ export class ChatController {
     }
   }
 
-  private parseHistory(historyJson: string | null, _sessionKey: string): ChatHistoryResult {
+  private parseHistory(historyJson: string | null, _sessionKey: string, previousMessages: ChatMessage[]): ChatHistoryResult {
     const empty: ChatHistoryResult = { messages: [] };
     if (!historyJson?.trim()) return empty;
     try {
@@ -311,7 +420,7 @@ export class ChatController {
         };
         messages.push(msg);
       }
-      return { messages, thinkingLevel };
+      return { messages: reconcileMessageIds(previousMessages, messages), thinkingLevel };
     } catch {
       return empty;
     }
@@ -596,7 +705,7 @@ export class ChatController {
       .request('chat.history', histRec, 15000)
       .then((res) => {
         if (!res.ok || !res.payloadJson) return;
-        const history = this.parseHistory(res.payloadJson, key);
+        const history = this.parseHistory(res.payloadJson, key, this._messages);
         this._messages = history.messages;
         const tl = history.thinkingLevel?.trim();
         if (tl && tl.length > 0) {

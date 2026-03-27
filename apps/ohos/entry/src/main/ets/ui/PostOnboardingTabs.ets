@@ -24,6 +24,7 @@ interface StatusChipColors {
 export struct PostOnboardingTabs {
   @StorageLink('nodeRuntime') nodeRuntime: NodeRuntime = AppStorage.get<NodeRuntime>('nodeRuntime') as NodeRuntime;
   @State activeTab: number = 0;
+  @State screenTabStarted: boolean = false;
   @State statusText: string = 'Offline';
   @State isConnected: boolean = false;
   @State remoteAddress: string = '';
@@ -41,6 +42,9 @@ export struct PostOnboardingTabs {
     this.remoteAddress = this.nodeRuntime.getRemoteAddress();
     if (this.activeTab === 2) {
       this.nodeRuntime.setVoiceScreenActive(true);
+    }
+    if (this.activeTab === 3) {
+      this.screenTabStarted = true;
     }
   }
 
@@ -95,6 +99,7 @@ export struct PostOnboardingTabs {
         this.nodeRuntime.setVoiceScreenActive(true);
       }
       if (index === 3) {
+        this.screenTabStarted = true;
         void this.nodeRuntime.refreshHomeCanvasOverviewIfConnected();
       }
     })
@@ -131,6 +136,13 @@ export struct PostOnboardingTabs {
       .justifyContent(FlexAlign.SpaceBetween)
 
       Stack() {
+        if (this.screenTabStarted) {
+          ScreenTabScreen({
+            isConnected: this.isConnected,
+            statusText: this.statusText,
+            visible: this.activeTab === 3,
+          })
+        }
         if (this.activeTab === 0) {
           ConnectTabScreen({
             statusText: this.statusText,
@@ -146,10 +158,11 @@ export struct PostOnboardingTabs {
         if (this.activeTab === 2) {
           VoiceTabScreen({ statusText: this.statusText })
         }
-        if (this.activeTab === 3) {
+        if (this.activeTab === 3 && !this.screenTabStarted) {
           ScreenTabScreen({
             isConnected: this.isConnected,
             statusText: this.statusText,
+            visible: true,
           })
         }
         if (this.activeTab === 4) {
