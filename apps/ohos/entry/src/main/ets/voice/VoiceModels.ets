@@ -24,4 +24,6 @@ export interface VoiceUiState {
   isSending: boolean;
   /** Second line after gateway status, e.g. "Listening" / "Mic off" / "2 queued" */
   activityLabel: string;
+  /** Full voice status or error detail for auxiliary UI messaging. */
+  statusDetail: string;
 }

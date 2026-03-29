@@ -2,6 +2,7 @@
  * Voice tab: STT, send via chat.send, assistant bubbles + TTS (Android MicCaptureManager parity).
  */
 import { i18n } from '@kit.LocalizationKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ChatController } from '../chat/ChatController';
 import type { TalkSpeakResult } from '../chat/ChatController';
 import type { SecurePrefs } from '../common/SecurePrefs';
@@ -13,8 +14,10 @@ import { VoiceConversationEntry, VoiceConversationRole, VoiceUiState } from './V
 type JsonRec = Record<string, object | string | number | boolean | null>;
 
 const MAX_CONVERSATION = 40;
-const DRAIN_MS = 2000;
+const DRAIN_MS = 1400;
 const PENDING_RUN_TIMEOUT_MS = 45000;
+const LOG_DOMAIN = 0x0000;
+const LOG_TAG = 'VoiceFlow';
 
 function randomId(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -294,8 +297,10 @@ export class VoiceCoordinator {
 
   async setMicEnabled(enabled: boolean): Promise<void> {
     if (enabled === this.micEnabled) {
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'setMicEnabled no-op enabled=%{public}s', String(enabled));
       return;
     }
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'setMicEnabled enabled=%{public}s', String(enabled));
     this.micEnabled = enabled;
     if (enabled) {
       this.micCooldown = false;
@@ -306,19 +311,23 @@ export class VoiceCoordinator {
       await this.tts.stop();
       const started = await this.asr.start(
         (text, isFinal) => {
+          hilog.info(LOG_DOMAIN, LOG_TAG, 'asr callback final=%{public}s text=%{public}s', String(isFinal), text);
           this.onRecognizerText(text, isFinal);
         },
         (err) => {
-          this.statusDetail = err.length > 30 ? err.substring(0, 30) + '…' : err;
+          hilog.error(LOG_DOMAIN, LOG_TAG, 'asr error %{public}s', err);
+          this.statusDetail = err.trim().length > 0 ? err.trim() : 'Speech recognition failed';
           this.notifyUi();
         },
       );
       if (!started) {
+        hilog.error(LOG_DOMAIN, LOG_TAG, 'asr start returned false');
         this.micEnabled = false;
         this.refreshStatusDetail();
         this.notifyUi();
         return;
       }
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'asr started successfully');
       this.sendQueuedIfIdle();
     } else {
       this.micCooldown = true;
@@ -330,7 +339,17 @@ export class VoiceCoordinator {
       this.drainTimer = setTimeout(() => {
         this.drainTimer = -1;
         const partial = this.liveTranscript.trim();
-        if (partial.length > 0 && this.sessionSegments.length === 0) {
+        hilog.info(
+          LOG_DOMAIN,
+          LOG_TAG,
+          'drain firing partial=%{public}s segments=%{public}d',
+          partial,
+          this.sessionSegments.length,
+        );
+        if (
+          partial.length > 0 &&
+          (this.sessionSegments.length === 0 || this.sessionSegments[this.sessionSegments.length - 1] !== partial)
+        ) {
           this.sessionSegments.push(partial);
         }
         this.liveTranscript = '';
@@ -356,8 +375,10 @@ export class VoiceCoordinator {
   private onRecognizerText(text: string, isFinal: boolean): void {
     const trimmed = text.trim();
     if (trimmed.length === 0) {
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'onRecognizerText ignored empty');
       return;
     }
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'onRecognizerText final=%{public}s text=%{public}s', String(isFinal), trimmed);
     if (!isFinal) {
       this.liveTranscript = trimmed;
       this.refreshStatusDetail();
@@ -372,7 +393,18 @@ export class VoiceCoordinator {
     }
     this.lastFinalSegment = trimmed;
     this.sessionSegments.push(trimmed);
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'sessionSegments appended count=%{public}d', this.sessionSegments.length);
     this.liveTranscript = '';
+    if (!this.micEnabled && this.micCooldown) {
+      if (this.drainTimer >= 0) {
+        clearTimeout(this.drainTimer);
+        this.drainTimer = -1;
+      }
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'final result arrived during cooldown; flushing immediately');
+      this.flushSessionToQueue();
+      this.micCooldown = false;
+      this.sendQueuedIfIdle();
+    }
     this.refreshStatusDetail();
     this.notifyUi();
   }
@@ -396,33 +428,41 @@ export class VoiceCoordinator {
     this.lastFinalSegment = null;
     this.liveTranscript = '';
     if (message.length === 0) {
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'flushSessionToQueue skipped empty message');
       return;
     }
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'flushSessionToQueue message=%{public}s', message);
     this.appendConversation(VoiceConversationRole.User, message, false);
     this.messageQueue.push(message);
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'messageQueue size=%{public}d', this.messageQueue.length);
     this.notifyUi();
     this.sendQueuedIfIdle();
   }
 
   private sendQueuedIfIdle(): void {
     if (this.isSending) {
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'sendQueuedIfIdle skipped because isSending=true');
       return;
     }
     if (this.messageQueue.length === 0) {
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'sendQueuedIfIdle skipped because queue empty');
       this.refreshStatusDetail();
       this.notifyUi();
       return;
     }
     if (!this.getGatewayConnected()) {
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'sendQueuedIfIdle waiting for gateway queue=%{public}d', this.messageQueue.length);
       this.refreshStatusDetail();
       this.notifyUi();
       return;
     }
     const chat = this.getChat();
     if (!chat) {
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'sendQueuedIfIdle missing chat controller');
       return;
     }
     const next = this.messageQueue[0];
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'sendQueuedIfIdle sending message=%{public}s', next);
     const runKey = randomId();
     this.isSending = true;
     this.pendingRunId = runKey;
@@ -431,6 +471,13 @@ export class VoiceCoordinator {
     this.notifyUi();
     const thinking = chat.getThinkingLevel();
     void chat.sendMessage(next, thinking, undefined, runKey).then((canonicalRunId: string | null) => {
+      hilog.info(
+        LOG_DOMAIN,
+        LOG_TAG,
+        'chat.send resolved canonicalRunId=%{public}s runKey=%{public}s',
+        canonicalRunId ?? 'null',
+        runKey,
+      );
       if (!canonicalRunId || canonicalRunId.trim().length === 0) {
         this.clearPendingRunTimer();
         if (this.messageQueue.length > 0 && this.messageQueue[0] === next) {
@@ -449,6 +496,18 @@ export class VoiceCoordinator {
         this.pendingRunId = canonicalRunId;
         this.armPendingRunTimeout(canonicalRunId);
       }
+    }).catch((err: Error) => {
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'chat.send rejected: %{public}s', err.message);
+      this.clearPendingRunTimer();
+      if (this.messageQueue.length > 0 && this.messageQueue[0] === next) {
+        this.messageQueue.shift();
+      }
+      this.isSending = false;
+      this.pendingRunId = null;
+      this.pendingAssistantEntryId = null;
+      this.statusDetail = `Send failed: ${err.message}`;
+      this.refreshStatusDetail();
+      this.notifyUi();
     });
   }
 
@@ -553,6 +612,7 @@ export class VoiceCoordinator {
       conversation: c,
       isSending: this.isSending,
       activityLabel: this.activityLabel(),
+      statusDetail: this.statusDetail,
     };
     return s;
   }

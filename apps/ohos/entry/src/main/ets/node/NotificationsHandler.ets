@@ -10,8 +10,14 @@ interface NotificationsListPayload {
   enabled: boolean;
   connected: boolean;
   count: number;
+  actionsSupported: boolean;
+  supportedActions: string[];
+  actionUnavailableReason?: string;
   notifications: StoredNotificationEntry[];
 }
+
+const ACTION_UNAVAILABLE_REASON =
+  'HarmonyOS notification subscription only exposes read-only third-party notification content';
 
 type JsonValue = object | string | number | boolean | null | undefined;
 
@@ -40,6 +46,9 @@ export class NotificationsHandler {
       enabled,
       connected: enabled,
       count: snapshot.notifications.length,
+      actionsSupported: false,
+      supportedActions: [],
+      actionUnavailableReason: ACTION_UNAVAILABLE_REASON,
       notifications: snapshot.notifications,
     };
     return invokeOk(JSON.stringify(payload));
@@ -70,7 +79,7 @@ export class NotificationsHandler {
     }
     return invokeErr(
       'ACTION_UNAVAILABLE',
-      `ACTION_UNAVAILABLE: notifications.${action.toLowerCase()} is not supported on HarmonyOS`,
+      `ACTION_UNAVAILABLE: notifications.${action.toLowerCase()} is not supported on HarmonyOS because notification actions are read-only`,
     );
   }
 

@@ -2,11 +2,12 @@
  * Onboarding flow: Welcome → Gateway → Permissions → FinalCheck.
  * Matches Android flow: scan QR primary, advanced setup with SetupCode/Manual.
  */
-import { common } from '@kit.AbilityKit';
+import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { promptAction } from '@kit.ArkUI';
+import { notificationExtensionSubscription, notificationManager } from '@kit.NotificationKit';
 import {
   decodeGatewaySetupCode,
   parseGatewayEndpoint,
@@ -15,6 +16,7 @@ import {
 } from '../common/GatewaySetupCode';
 import type { GatewayEndpointConfig } from '../common/GatewaySetupCode';
 import { NodeRuntime } from '../NodeRuntime';
+import { MotionHandler } from '../node/MotionHandler';
 
 type OnboardingStep = 'welcome' | 'gateway' | 'permissions' | 'finalCheck';
 type GatewayInputMode = 'setupCode' | 'manual';
@@ -80,11 +82,19 @@ export struct OnboardingFlow {
   @State enableMotion: boolean = false;
   @State enableSms: boolean = false;
   @State enableCallLog: boolean = false;
+  @State locationGranted: boolean = false;
+  @State notificationsGranted: boolean = false;
+  @State notificationListenerGranted: boolean = false;
+  @State microphoneGranted: boolean = false;
+  @State cameraGranted: boolean = false;
+  @State photosGranted: boolean = false;
+  @State contactsGranted: boolean = false;
+  @State calendarGranted: boolean = false;
+  @State motionGranted: boolean = false;
   /** Match Android: hide SMS / call log rows when capability is absent. */
   private readonly smsRowAvailable: boolean = false;
   private readonly callLogRowAvailable: boolean = false;
-  /** Motion sensors not checked on HarmonyOS yet; keep row disabled like unsupported hardware. */
-  private readonly motionRowAvailable: boolean = false;
+  private readonly motionRowAvailable: boolean = MotionHandler.isAvailable();
 
   aboutToAppear(): void {
     this.nodeRuntime.setStatusListener((s) => {
@@ -99,6 +109,11 @@ export struct OnboardingFlow {
     this.statusText = this.nodeRuntime.getStatusText();
     this.isConnected = this.nodeRuntime.getIsConnected();
     this.remoteAddress = this.nodeRuntime.getRemoteAddress();
+    void this.refreshPermissionStates();
+  }
+
+  onPageShow(): void {
+    void this.refreshPermissionStates();
   }
 
   private async doScanQr(): Promise<void> {
@@ -213,7 +228,176 @@ export struct OnboardingFlow {
   }
 
   private async doFinish(): Promise<void> {
+    await this.requestSelectedPermissions();
     await this.nodeRuntime.setOnboardingCompleted(true);
+  }
+
+  private permissionGranted(permissionNames: Permissions[]): boolean {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return false;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    const tokenId = ctx.applicationInfo.accessTokenId;
+    for (let i = 0; i < permissionNames.length; i++) {
+      try {
+        const status = at.checkAccessTokenSync(tokenId, permissionNames[i]);
+        if (status === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+          return true;
+        }
+      } catch {
+        // Ignore unsupported permission names on some Harmony builds.
+      }
+    }
+    return false;
+  }
+
+  private permissionsGranted(permissionNames: Permissions[]): boolean {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return false;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    const tokenId = ctx.applicationInfo.accessTokenId;
+    for (let i = 0; i < permissionNames.length; i++) {
+      try {
+        const status = at.checkAccessTokenSync(tokenId, permissionNames[i]);
+        if (status !== abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+    }
+    return permissionNames.length > 0;
+  }
+
+  private async requestRuntimePermissions(permissionNames: Permissions[]): Promise<boolean> {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return false;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    try {
+      const result = await at.requestPermissionsFromUser(ctx, permissionNames);
+      return result.authResults.length > 0 &&
+        result.authResults.some((r) => r === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED);
+    } catch {
+      return this.permissionGranted(permissionNames);
+    }
+  }
+
+  private async refreshPermissionStates(): Promise<void> {
+    this.locationGranted = this.permissionGranted([
+      'ohos.permission.APPROXIMATELY_LOCATION',
+      'ohos.permission.LOCATION',
+    ]);
+    this.notificationsGranted = await this.readNotificationsGranted();
+    this.notificationListenerGranted = await this.readNotificationListenerGranted();
+    this.microphoneGranted = this.permissionGranted(['ohos.permission.MICROPHONE']);
+    this.cameraGranted = this.permissionGranted(['ohos.permission.CAMERA']);
+    this.photosGranted = this.permissionGranted(['ohos.permission.READ_IMAGEVIDEO']);
+    this.contactsGranted = this.permissionsGranted([
+      'ohos.permission.READ_CONTACTS',
+      'ohos.permission.WRITE_CONTACTS',
+    ]);
+    this.calendarGranted = this.permissionsGranted([
+      'ohos.permission.READ_CALENDAR',
+      'ohos.permission.WRITE_CALENDAR',
+    ]);
+    this.motionGranted = this.permissionsGranted([
+      'ohos.permission.ACTIVITY_MOTION',
+      'ohos.permission.ACCELEROMETER',
+    ]);
+  }
+
+  private async readNotificationsGranted(): Promise<boolean> {
+    try {
+      return await notificationManager.isNotificationEnabled();
+    } catch {
+      return false;
+    }
+  }
+
+  private async readNotificationListenerGranted(): Promise<boolean> {
+    try {
+      return await notificationExtensionSubscription.isUserGranted();
+    } catch {
+      return false;
+    }
+  }
+
+  private openAppSettings(): void {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return;
+    }
+    try {
+      void ctx.startAbility({
+        bundleName: 'com.huawei.hmos.settings',
+        abilityName: 'com.huawei.hmos.settings.MainAbility',
+        uri: 'application_info_entry',
+      });
+    } catch {
+      // best-effort
+    }
+  }
+
+  private async requestSelectedPermissions(): Promise<void> {
+    if (this.enableLocation) {
+      await this.requestRuntimePermissions([
+        'ohos.permission.APPROXIMATELY_LOCATION',
+        'ohos.permission.LOCATION',
+      ]);
+    }
+    if (this.enableNotifications) {
+      const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+      if (ctx) {
+        try {
+          await notificationManager.requestEnableNotification(ctx);
+        } catch {
+          // best-effort
+        }
+      }
+    }
+    if (this.enableNotificationListener) {
+      const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+      if (ctx) {
+        try {
+          await notificationExtensionSubscription.openSubscriptionSettings(ctx);
+        } catch {
+          this.openAppSettings();
+        }
+      }
+    }
+    if (this.enableMicrophone) {
+      await this.requestRuntimePermissions(['ohos.permission.MICROPHONE']);
+    }
+    if (this.enableCamera) {
+      await this.requestRuntimePermissions(['ohos.permission.CAMERA']);
+    }
+    if (this.enablePhotos) {
+      await this.requestRuntimePermissions(['ohos.permission.READ_IMAGEVIDEO']);
+    }
+    if (this.enableContacts) {
+      await this.requestRuntimePermissions([
+        'ohos.permission.READ_CONTACTS',
+        'ohos.permission.WRITE_CONTACTS',
+      ]);
+    }
+    if (this.enableCalendar) {
+      await this.requestRuntimePermissions([
+        'ohos.permission.READ_CALENDAR',
+        'ohos.permission.WRITE_CALENDAR',
+      ]);
+    }
+    if (this.motionRowAvailable && this.enableMotion) {
+      await this.requestRuntimePermissions([
+        'ohos.permission.ACTIVITY_MOTION',
+        'ohos.permission.ACCELEROMETER',
+      ]);
+    }
+    await this.refreshPermissionStates();
   }
 
   private resolvedEndpointFromSetupCode(): string {
@@ -1022,7 +1206,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_location_title'),
         $r('app.string.onboarding_perm_location_subtitle'),
-        false,
+        this.locationGranted,
         true,
         '',
         this.enableLocation,
@@ -1032,7 +1216,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_notifications_title'),
         $r('app.string.onboarding_perm_notifications_subtitle'),
-        false,
+        this.notificationsGranted,
         true,
         '',
         this.enableNotifications,
@@ -1042,7 +1226,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_notification_listener_title'),
         $r('app.string.onboarding_perm_notification_listener_subtitle'),
-        false,
+        this.notificationListenerGranted,
         true,
         '',
         this.enableNotificationListener,
@@ -1053,7 +1237,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_microphone_title'),
         $r('app.string.onboarding_perm_microphone_subtitle'),
-        false,
+        this.microphoneGranted,
         true,
         '',
         this.enableMicrophone,
@@ -1063,7 +1247,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_camera_title'),
         $r('app.string.onboarding_perm_camera_subtitle'),
-        false,
+        this.cameraGranted,
         true,
         '',
         this.enableCamera,
@@ -1073,7 +1257,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_photos_title'),
         $r('app.string.onboarding_perm_photos_subtitle'),
-        false,
+        this.photosGranted,
         true,
         '',
         this.enablePhotos,
@@ -1084,7 +1268,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_contacts_title'),
         $r('app.string.onboarding_perm_contacts_subtitle'),
-        false,
+        this.contactsGranted,
         true,
         '',
         this.enableContacts,
@@ -1094,7 +1278,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_calendar_title'),
         $r('app.string.onboarding_perm_calendar_subtitle'),
-        false,
+        this.calendarGranted,
         true,
         '',
         this.enableCalendar,
@@ -1104,7 +1288,7 @@ export struct OnboardingFlow {
       this.PermissionToggleRow(
         $r('app.string.onboarding_perm_motion_title'),
         $r('app.string.onboarding_perm_motion_subtitle'),
-        false,
+        this.motionGranted,
         this.motionRowAvailable,
         this.motionRowAvailable ? '' : (this.resStr($r('app.string.onboarding_perm_unavailable_on_device')) || ''),
         this.enableMotion,

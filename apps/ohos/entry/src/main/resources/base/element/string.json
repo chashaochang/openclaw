@@ -522,7 +522,7 @@
     },
     {
       "name": "settings_permission_location_sub",
-      "value": "Used by location tools and nearby gateway discovery."
+      "value": "Used by location tools and nearby gateway discovery while the app stays open."
     },
     {
       "name": "settings_permission_notifications",
@@ -538,7 +538,7 @@
     },
     {
       "name": "settings_permission_notification_listener_sub",
-      "value": "Read third-party notifications for automation."
+      "value": "Read third-party notifications for automation. Notification actions stay read-only on HarmonyOS."
     },
     {
       "name": "settings_permission_photos",
@@ -886,7 +886,7 @@
     },
     {
       "name": "onboarding_perm_notification_listener_subtitle",
-      "value": "Read and act on your notifications (configure in system settings)"
+      "value": "Read your notifications for automation. Actions stay read-only on HarmonyOS."
     },
     {
       "name": "onboarding_perm_microphone_subtitle",

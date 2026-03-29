@@ -16,6 +16,7 @@ function defaultVoiceUiState(): VoiceUiState {
     conversation: [],
     isSending: false,
     activityLabel: 'Mic off',
+    statusDetail: 'Mic off',
   };
   return s;
 }
@@ -26,11 +27,6 @@ export struct VoiceTabScreen {
   @StorageLink('nodeRuntime') nodeRuntime: NodeRuntime = AppStorage.get<NodeRuntime>('nodeRuntime') as NodeRuntime;
   @State voiceState: VoiceUiState = defaultVoiceUiState();
   @State hasMicPermission: boolean = false;
-  @State micPulseLevel: number = 0.08;
-  private voiceListScroller: ListScroller = new ListScroller();
-  private voicePulseTimer: number = -1;
-  private prevVoiceScrollKey: string = '';
-  private lastMicEnabled: boolean = false;
 
   private resStr(res: Resource): string {
     const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
@@ -47,6 +43,45 @@ export struct VoiceTabScreen {
   private chipsLine(): string {
     const g = this.statusText.trim().length > 0 ? this.statusText.trim() : 'Offline';
     return `${g} · ${this.voiceState.activityLabel}`;
+  }
+
+  private auxiliaryStatusText(): string {
+    const detail = this.voiceState.statusDetail.trim();
+    const activity = this.voiceState.activityLabel.trim();
+    if (detail.length === 0 || detail === activity) {
+      return '';
+    }
+    return detail;
+  }
+
+  private statusChipBackground(): string {
+    if (this.voiceState.micEnabled) {
+      return '#E8F5E9';
+    }
+    if (this.voiceState.isSending) {
+      return '#ECF3FF';
+    }
+    return '#F6F7FA';
+  }
+
+  private statusChipBorder(): string {
+    if (this.voiceState.micEnabled) {
+      return 'rgba(47, 140, 90, 0.30)';
+    }
+    if (this.voiceState.isSending) {
+      return 'rgba(29, 93, 216, 0.24)';
+    }
+    return '#E5E7EC';
+  }
+
+  private statusChipTextColor(): string {
+    if (this.voiceState.micEnabled) {
+      return '#2F8C5A';
+    }
+    if (this.voiceState.isSending) {
+      return '#1D5DD8';
+    }
+    return '#4D5563';
   }
 
   private refreshMicPermission(): void {
@@ -70,7 +105,6 @@ export struct VoiceTabScreen {
     this.nodeRuntime.setVoiceUiListener((s: VoiceUiState) => {
       this.voiceState = s;
     });
-    this.syncMicPulseState(this.voiceState.micEnabled);
   }
 
   onPageShow(): void {
@@ -81,16 +115,6 @@ export struct VoiceTabScreen {
 
   aboutToDisappear(): void {
     this.nodeRuntime.setVoiceUiListener(null);
-    this.stopMicPulse();
-  }
-
-  aboutToUpdate(): void {
-    this.syncMicPulseState(this.voiceState.micEnabled);
-    const scrollKey = this.voiceScrollKey();
-    if (scrollKey !== this.prevVoiceScrollKey) {
-      this.prevVoiceScrollKey = scrollKey;
-      this.scheduleVoiceScrollToEnd();
-    }
   }
 
   private async requestMicAndEnable(): Promise<void> {
@@ -108,6 +132,7 @@ export struct VoiceTabScreen {
       this.hasMicPermission = granted;
       if (granted) {
         this.refreshMicPermission();
+        this.nodeRuntime.setVoiceScreenActive(true);
         await this.nodeRuntime.setVoiceMicEnabled(true);
       }
     } catch {
@@ -131,102 +156,11 @@ export struct VoiceTabScreen {
     }
   }
 
-  private hasStreamingAssistantEntry(): boolean {
-    for (let i = 0; i < this.voiceState.conversation.length; i++) {
-      const entry = this.voiceState.conversation[i];
-      if (entry.role === VoiceConversationRole.Assistant && entry.isStreaming) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private voiceListItemCount(): number {
-    let count = this.voiceState.conversation.length;
-    if (count === 0 && !this.voiceState.isSending) {
-      count += 1;
-    }
-    if (this.voiceState.isSending && !this.hasStreamingAssistantEntry()) {
-      count += 1;
-    }
-    if (this.voiceState.liveTranscript.trim().length > 0) {
-      count += 1;
-    }
-    return count;
-  }
-
-  private voiceListLastIndex(): number {
-    const count = this.voiceListItemCount();
-    return count > 0 ? count - 1 : 0;
-  }
-
-  private voiceScrollKey(): string {
-    const conversation = this.voiceState.conversation;
-    const last = conversation.length > 0 ? conversation[conversation.length - 1] : null;
-    const lastId = last ? last.id : '-';
-    const lastTextLen = last ? last.text.length : 0;
-    const lastStreaming = last && last.isStreaming ? '1' : '0';
-    const transcriptLen = this.voiceState.liveTranscript.trim().length;
-    return `${conversation.length}-${lastId}-${lastTextLen}-${lastStreaming}-${transcriptLen}-${this.voiceState.isSending ? 1 : 0}`;
-  }
-
-  private scheduleVoiceScrollToEnd(): void {
-    const delays: number[] = [0, 80, 180];
-    for (let i = 0; i < delays.length; i++) {
-      setTimeout(() => {
-        this.scrollVoiceListToEnd(i > 0);
-      }, delays[i]);
-    }
-  }
-
-  private scrollVoiceListToEnd(animate: boolean): void {
-    const lastIndex = this.voiceListLastIndex();
-    if (lastIndex < 0) {
-      return;
-    }
-    try {
-      this.voiceListScroller.scrollToIndex(lastIndex, animate, ScrollAlign.END);
-    } catch {
-      // List may not be attached yet.
-    }
-  }
-
-  private syncMicPulseState(enabled: boolean): void {
-    if (enabled === this.lastMicEnabled) {
-      return;
-    }
-    this.lastMicEnabled = enabled;
-    if (enabled) {
-      this.startMicPulse();
-      return;
-    }
-    this.stopMicPulse();
-  }
-
-  private startMicPulse(): void {
-    this.stopMicPulse();
-    const levels: number[] = [0.10, 0.22, 0.38, 0.58, 0.42, 0.26];
-    let idx = 0;
-    this.micPulseLevel = levels[0];
-    this.voicePulseTimer = setInterval(() => {
-      idx = (idx + 1) % levels.length;
-      this.micPulseLevel = levels[idx];
-    }, 180) as number;
-  }
-
-  private stopMicPulse(): void {
-    if (this.voicePulseTimer >= 0) {
-      clearInterval(this.voicePulseTimer);
-      this.voicePulseTimer = -1;
-    }
-    this.micPulseLevel = 0.08;
-  }
-
   build() {
     Column() {
-      List({ scroller: this.voiceListScroller, initialIndex: this.voiceListLastIndex(), space: 10 }) {
-        if (this.voiceState.conversation.length === 0 && !this.voiceState.isSending) {
-          ListItem() {
+      Scroll() {
+        Column({ space: 10 }) {
+          if (this.voiceState.conversation.length === 0 && !this.voiceState.isSending) {
             Column({ space: 10 }) {
               SymbolGlyph($r('sys.symbol.mic_fill'))
                 .fontSize(48)
@@ -244,10 +178,8 @@ export struct VoiceTabScreen {
             .padding({ top: 32, bottom: 16 })
             .alignItems(HorizontalAlign.Center)
           }
-        }
 
-        ForEach(this.voiceState.conversation, (entry: VoiceConversationEntry) => {
-          ListItem() {
+          ForEach(this.voiceState.conversation, (entry: VoiceConversationEntry) => {
             Row() {
               if (entry.role === VoiceConversationRole.User) {
                 Blank().layoutWeight(0.08)
@@ -280,11 +212,11 @@ export struct VoiceTabScreen {
             }
             .width('100%')
             .justifyContent(FlexAlign.SpaceBetween)
-          }
-        }, (entry: VoiceConversationEntry): string => entry.id)
+          }, (entry: VoiceConversationEntry): string => entry.id)
 
-        if (this.voiceState.isSending && !this.hasStreamingAssistantEntry()) {
-          ListItem() {
+          if (this.voiceState.isSending &&
+            !this.voiceState.conversation.some((e: VoiceConversationEntry): boolean =>
+              e.role === VoiceConversationRole.Assistant && e.isStreaming)) {
             Row() {
               Column({ space: 4 }) {
                 Text($r('app.string.voice_bubble_assistant'))
@@ -305,10 +237,8 @@ export struct VoiceTabScreen {
             }
             .width('100%')
           }
-        }
 
-        if (this.voiceState.liveTranscript.trim().length > 0) {
-          ListItem() {
+          if (this.voiceState.liveTranscript.trim().length > 0) {
             Text(this.voiceState.liveTranscript.trim())
               .fontSize(14)
               .fontColor('#17181C')
@@ -319,11 +249,12 @@ export struct VoiceTabScreen {
               .border({ width: 1, color: 'rgba(29, 93, 216, 0.2)' })
           }
         }
+        .width('100%')
+        .constraintSize({ minHeight: '100%' })
+        .padding({ left: 20, right: 20, bottom: 12 })
       }
-      .width('100%')
       .layoutWeight(1)
-      .padding({ left: 20, right: 20, bottom: 12 })
-      .divider({ strokeWidth: 0 })
+      .width('100%')
       .scrollBar(BarState.Off)
 
       Row() {
@@ -347,15 +278,8 @@ export struct VoiceTabScreen {
         }
 
         Column() {
-          if (this.voiceState.micEnabled) {
-            Row()
-              .width(72 + this.micPulseLevel * 22)
-              .height(72 + this.micPulseLevel * 22)
-              .borderRadius(999)
-              .backgroundColor(`rgba(220, 53, 69, ${0.12 + this.micPulseLevel * 0.14})`)
-          }
           Button() {
-            SymbolGlyph($r('sys.symbol.mic_fill'))
+            SymbolGlyph(this.voiceState.micEnabled ? $r('sys.symbol.mic_slash_fill') : $r('sys.symbol.mic_fill'))
               .fontSize(26)
               .fontColor([Color.White])
           }
@@ -370,6 +294,8 @@ export struct VoiceTabScreen {
             if (this.voiceState.micCooldown) {
               return;
             }
+            this.refreshMicPermission();
+            this.nodeRuntime.setVoiceScreenActive(true);
             if (this.voiceState.micEnabled) {
               void this.nodeRuntime.setVoiceMicEnabled(false);
             } else {
@@ -394,20 +320,34 @@ export struct VoiceTabScreen {
       .padding({ left: 20, right: 20, bottom: 8 })
       .justifyContent(FlexAlign.SpaceBetween)
 
-      Text(this.chipsLine())
-        .fontSize(13)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#4D5563')
-        .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-        .width('100%')
-        .textAlign(TextAlign.Center)
-        .backgroundColor(this.voiceState.micEnabled ? '#E8F5E9' : '#F6F7FA')
-        .borderRadius(999)
-        .border({
-          width: 1,
-          color: this.voiceState.micEnabled ? 'rgba(47, 140, 90, 0.3)' : '#E5E7EC',
-        })
-        .margin({ left: 20, right: 20, bottom: 10 })
+      Row() {
+        Text(this.chipsLine())
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.statusChipTextColor())
+          .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+          .textAlign(TextAlign.Center)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .backgroundColor(this.statusChipBackground())
+          .borderRadius(999)
+          .border({
+            width: 1,
+            color: this.statusChipBorder(),
+          })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Center)
+      .padding({ left: 20, right: 20, bottom: 10 })
+
+      if (this.auxiliaryStatusText().length > 0) {
+        Text(this.auxiliaryStatusText())
+          .fontSize(12)
+          .fontColor('#8A92A2')
+          .textAlign(TextAlign.Center)
+          .width('100%')
+          .padding({ left: 20, right: 20, bottom: 8 })
+      }
 
       if (!this.hasMicPermission) {
         Column({ space: 8 }) {

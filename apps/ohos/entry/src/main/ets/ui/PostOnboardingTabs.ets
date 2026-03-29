@@ -139,7 +139,6 @@ export struct PostOnboardingTabs {
         if (this.screenTabStarted) {
           ScreenTabScreen({
             isConnected: this.isConnected,
-            statusText: this.statusText,
             visible: this.activeTab === 3,
           })
         }
@@ -161,7 +160,6 @@ export struct PostOnboardingTabs {
         if (this.activeTab === 3 && !this.screenTabStarted) {
           ScreenTabScreen({
             isConnected: this.isConnected,
-            statusText: this.statusText,
             visible: true,
           })
         }

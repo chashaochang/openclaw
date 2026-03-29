@@ -5,6 +5,7 @@ import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
 import { notificationExtensionSubscription, notificationManager } from '@kit.NotificationKit';
 import { NodeRuntime } from '../NodeRuntime';
+import { MotionHandler } from '../node/MotionHandler';
 
 interface StatusChipColorSet {
   bg: string;
@@ -29,9 +30,14 @@ export struct SettingsTabScreen {
   @State hasMicPermission: boolean = false;
   @State hasCameraPermission: boolean = false;
   @State hasLocationPermission: boolean = false;
+  @State hasPhotosPermission: boolean = false;
+  @State hasContactsPermission: boolean = false;
+  @State hasCalendarPermission: boolean = false;
+  @State hasMotionPermission: boolean = false;
   @State notificationsEnabled: boolean = false;
   @State notificationListenerEnabled: boolean = false;
   @State refreshBusy: boolean = false;
+  private readonly motionAvailable: boolean = MotionHandler.isAvailable();
 
   private resStr(res: Resource): string {
     const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
@@ -123,6 +129,31 @@ export struct SettingsTabScreen {
     }
   }
 
+  private refreshPhotosPermission(): void {
+    this.hasPhotosPermission = this.readPermissionGranted(['ohos.permission.READ_IMAGEVIDEO']);
+  }
+
+  private refreshContactsPermission(): void {
+    this.hasContactsPermission = this.allPermissionsGranted([
+      'ohos.permission.READ_CONTACTS',
+      'ohos.permission.WRITE_CONTACTS',
+    ]);
+  }
+
+  private refreshCalendarPermission(): void {
+    this.hasCalendarPermission = this.allPermissionsGranted([
+      'ohos.permission.READ_CALENDAR',
+      'ohos.permission.WRITE_CALENDAR',
+    ]);
+  }
+
+  private refreshMotionPermission(): void {
+    this.hasMotionPermission = this.allPermissionsGranted([
+      'ohos.permission.ACTIVITY_MOTION',
+      'ohos.permission.ACCELEROMETER',
+    ]);
+  }
+
   private async refreshNotificationsEnabled(): Promise<void> {
     try {
       this.notificationsEnabled = await notificationManager.isNotificationEnabled();
@@ -152,6 +183,10 @@ export struct SettingsTabScreen {
     this.refreshMicPermission();
     this.refreshCameraPermission();
     this.refreshLocationPermission();
+    this.refreshPhotosPermission();
+    this.refreshContactsPermission();
+    this.refreshCalendarPermission();
+    this.refreshMotionPermission();
     await this.refreshNotificationsEnabled();
   }
 
@@ -234,6 +269,35 @@ export struct SettingsTabScreen {
     }
   }
 
+  private async requestPhotos(): Promise<void> {
+    const ok = await this.requestSimplePermission(['ohos.permission.READ_IMAGEVIDEO']);
+    this.hasPhotosPermission = ok;
+  }
+
+  private async requestContacts(): Promise<void> {
+    const ok = await this.requestSimplePermission([
+      'ohos.permission.READ_CONTACTS',
+      'ohos.permission.WRITE_CONTACTS',
+    ]);
+    this.hasContactsPermission = ok;
+  }
+
+  private async requestCalendar(): Promise<void> {
+    const ok = await this.requestSimplePermission([
+      'ohos.permission.READ_CALENDAR',
+      'ohos.permission.WRITE_CALENDAR',
+    ]);
+    this.hasCalendarPermission = ok;
+  }
+
+  private async requestMotion(): Promise<void> {
+    const ok = await this.requestSimplePermission([
+      'ohos.permission.ACTIVITY_MOTION',
+      'ohos.permission.ACCELEROMETER',
+    ]);
+    this.hasMotionPermission = ok;
+  }
+
   private async requestNotifications(): Promise<void> {
     const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
     if (!ctx) {
@@ -269,6 +333,61 @@ export struct SettingsTabScreen {
     const tls = this.resStr($r('app.string.settings_tls_badge'));
     const tcp = this.resStr($r('app.string.settings_tcp_badge'));
     return `${h}:${p.length > 0 ? p : '?'} · ${this.manualTls ? tls : tcp}`;
+  }
+
+  private readPermissionGranted(permissionNames: Permissions[]): boolean {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return false;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    const tokenId = ctx.applicationInfo.accessTokenId;
+    for (let i = 0; i < permissionNames.length; i++) {
+      try {
+        const status = at.checkAccessTokenSync(tokenId, permissionNames[i]);
+        if (status === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+          return true;
+        }
+      } catch {
+        // Ignore unsupported permission names on some Harmony builds.
+      }
+    }
+    return false;
+  }
+
+  private allPermissionsGranted(permissionNames: Permissions[]): boolean {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return false;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    const tokenId = ctx.applicationInfo.accessTokenId;
+    for (let i = 0; i < permissionNames.length; i++) {
+      try {
+        const status = at.checkAccessTokenSync(tokenId, permissionNames[i]);
+        if (status !== abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+    }
+    return permissionNames.length > 0;
+  }
+
+  private async requestSimplePermission(permissionNames: Permissions[]): Promise<boolean> {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return false;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    try {
+      const result = await at.requestPermissionsFromUser(ctx, permissionNames);
+      return result.authResults.length > 0 &&
+        result.authResults.every((r) => r === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED);
+    } catch {
+      return this.allPermissionsGranted(permissionNames);
+    }
   }
 
   private statusChipColors(): StatusChipColorSet {
@@ -671,13 +790,31 @@ export struct SettingsTabScreen {
               Text($r('app.string.settings_permission_photos_sub'))
                 .fontSize(13)
                 .fontColor('#8A92A2')
-              Text(this.resStr($r('app.string.settings_permission_unavailable_platform')))
+              Text(this.hasPhotosPermission ? this.resStr($r('app.string.settings_permission_granted')) : '—')
                 .fontSize(12)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#8A92A2')
+                .fontColor(this.hasPhotosPermission ? '#2F8C5A' : '#C8841A')
             }
             .alignItems(HorizontalAlign.Start)
             .layoutWeight(1)
+            Button(
+              this.hasPhotosPermission ?
+                this.resStr($r('app.string.settings_permission_manage')) :
+                this.resStr($r('app.string.settings_permission_grant')),
+            )
+              .fontSize(12)
+              .fontWeight(FontWeight.Bold)
+              .height(36)
+              .backgroundColor('#1D5DD8')
+              .fontColor(Color.White)
+              .borderRadius(14)
+              .onClick(() => {
+                if (this.hasPhotosPermission) {
+                  this.openAppSettings();
+                } else {
+                  void this.requestPhotos();
+                }
+              })
           }
           .width('100%')
           .padding({ top: 12, bottom: 12 })
@@ -693,13 +830,31 @@ export struct SettingsTabScreen {
               Text($r('app.string.settings_permission_contacts_sub'))
                 .fontSize(13)
                 .fontColor('#8A92A2')
-              Text(this.resStr($r('app.string.settings_permission_unavailable_platform')))
+              Text(this.hasContactsPermission ? this.resStr($r('app.string.settings_permission_granted')) : '—')
                 .fontSize(12)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#8A92A2')
+                .fontColor(this.hasContactsPermission ? '#2F8C5A' : '#C8841A')
             }
             .alignItems(HorizontalAlign.Start)
             .layoutWeight(1)
+            Button(
+              this.hasContactsPermission ?
+                this.resStr($r('app.string.settings_permission_manage')) :
+                this.resStr($r('app.string.settings_permission_grant')),
+            )
+              .fontSize(12)
+              .fontWeight(FontWeight.Bold)
+              .height(36)
+              .backgroundColor('#1D5DD8')
+              .fontColor(Color.White)
+              .borderRadius(14)
+              .onClick(() => {
+                if (this.hasContactsPermission) {
+                  this.openAppSettings();
+                } else {
+                  void this.requestContacts();
+                }
+              })
           }
           .width('100%')
           .padding({ top: 12, bottom: 12 })
@@ -715,38 +870,76 @@ export struct SettingsTabScreen {
               Text($r('app.string.settings_permission_calendar_sub'))
                 .fontSize(13)
                 .fontColor('#8A92A2')
-              Text(this.resStr($r('app.string.settings_permission_unavailable_platform')))
+              Text(this.hasCalendarPermission ? this.resStr($r('app.string.settings_permission_granted')) : '—')
                 .fontSize(12)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#8A92A2')
+                .fontColor(this.hasCalendarPermission ? '#2F8C5A' : '#C8841A')
             }
             .alignItems(HorizontalAlign.Start)
             .layoutWeight(1)
+            Button(
+              this.hasCalendarPermission ?
+                this.resStr($r('app.string.settings_permission_manage')) :
+                this.resStr($r('app.string.settings_permission_grant')),
+            )
+              .fontSize(12)
+              .fontWeight(FontWeight.Bold)
+              .height(36)
+              .backgroundColor('#1D5DD8')
+              .fontColor(Color.White)
+              .borderRadius(14)
+              .onClick(() => {
+                if (this.hasCalendarPermission) {
+                  this.openAppSettings();
+                } else {
+                  void this.requestCalendar();
+                }
+              })
           }
           .width('100%')
           .padding({ top: 12, bottom: 12 })
 
-          Divider().strokeWidth(1).color('#E5E7EC').width('100%')
+          if (this.motionAvailable) {
+            Divider().strokeWidth(1).color('#E5E7EC').width('100%')
 
-          Row() {
-            Column({ space: 4 }) {
-              Text($r('app.string.settings_permission_motion'))
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#17181C')
-              Text($r('app.string.settings_permission_motion_sub'))
-                .fontSize(13)
-                .fontColor('#8A92A2')
-              Text(this.resStr($r('app.string.settings_permission_unavailable_platform')))
+            Row() {
+              Column({ space: 4 }) {
+                Text($r('app.string.settings_permission_motion'))
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor('#17181C')
+                Text($r('app.string.settings_permission_motion_sub'))
+                  .fontSize(13)
+                  .fontColor('#8A92A2')
+                Text(this.hasMotionPermission ? this.resStr($r('app.string.settings_permission_granted')) : '—')
+                  .fontSize(12)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.hasMotionPermission ? '#2F8C5A' : '#C8841A')
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+              Button(
+                this.hasMotionPermission ?
+                  this.resStr($r('app.string.settings_permission_manage')) :
+                  this.resStr($r('app.string.settings_permission_grant')),
+              )
                 .fontSize(12)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#8A92A2')
+                .fontWeight(FontWeight.Bold)
+                .height(36)
+                .backgroundColor('#1D5DD8')
+                .fontColor(Color.White)
+                .borderRadius(14)
+                .onClick(() => {
+                  if (this.hasMotionPermission) {
+                    this.openAppSettings();
+                  } else {
+                    void this.requestMotion();
+                  }
+                })
             }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
+            .width('100%')
+            .padding({ top: 12, bottom: 12 })
           }
-          .width('100%')
-          .padding({ top: 12, bottom: 12 })
 
           Divider().strokeWidth(1).color('#E5E7EC').width('100%')
 

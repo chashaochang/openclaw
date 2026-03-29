@@ -33,6 +33,44 @@ export const OpenClawLocationCommand: OpenClawLocationCommandType = {
   Get: 'location.get',
 };
 
+export interface OpenClawCalendarCommandType {
+  Events: string;
+  Add: string;
+}
+
+export const OpenClawCalendarCommand: OpenClawCalendarCommandType = {
+  Events: 'calendar.events',
+  Add: 'calendar.add',
+};
+
+export interface OpenClawContactsCommandType {
+  Search: string;
+  Add: string;
+}
+
+export const OpenClawContactsCommand: OpenClawContactsCommandType = {
+  Search: 'contacts.search',
+  Add: 'contacts.add',
+};
+
+export interface OpenClawPhotosCommandType {
+  Latest: string;
+}
+
+export const OpenClawPhotosCommand: OpenClawPhotosCommandType = {
+  Latest: 'photos.latest',
+};
+
+export interface OpenClawMotionCommandType {
+  Activity: string;
+  Pedometer: string;
+}
+
+export const OpenClawMotionCommand: OpenClawMotionCommandType = {
+  Activity: 'motion.activity',
+  Pedometer: 'motion.pedometer',
+};
+
 export interface OpenClawCameraCommandType {
   List: string;
   Snap: string;
@@ -57,19 +95,27 @@ export const OpenClawNotificationsCommand: OpenClawNotificationsCommandType = {
 
 export interface OpenClawCapabilityType {
   readonly Canvas: string;
+  readonly Calendar: string;
   readonly Camera: string;
+  readonly Contacts: string;
   readonly Location: string;
+  readonly Motion: string;
   readonly Notifications: string;
   readonly Device: string;
+  readonly Photos: string;
   readonly System: string;
 }
 
 export const OpenClawCapability: OpenClawCapabilityType = {
   Canvas: 'canvas',
+  Calendar: 'calendar',
   Camera: 'camera',
+  Contacts: 'contacts',
   Location: 'location',
+  Motion: 'motion',
   Notifications: 'notifications',
   Device: 'device',
+  Photos: 'photos',
   System: 'system',
 };
 

@@ -5,12 +5,16 @@ import { abilityAccessCtrl, common, Permissions } from "@kit.AbilityKit";
 import { deviceInfo } from "@kit.BasicServicesKit";
 import {
   OpenClawCapability,
+  OpenClawCalendarCommand,
   OpenClawCameraCommand,
   OpenClawCanvasA2UICommand,
   OpenClawCanvasCommand,
+  OpenClawContactsCommand,
   OpenClawDeviceCommand,
   OpenClawLocationCommand,
+  OpenClawMotionCommand,
   OpenClawNotificationsCommand,
+  OpenClawPhotosCommand,
   OpenClawSystemCommand,
 } from "./protocol/OpenClawProtocol";
 import { SecurePrefs } from "./common/SecurePrefs";
@@ -23,7 +27,11 @@ import { DeviceHandler } from "./node/DeviceHandler";
 import { SystemHandler } from "./node/SystemHandler";
 import { InvokeDispatcher } from "./node/InvokeDispatcher";
 import { CameraHandler } from "./node/CameraHandler";
+import { CalendarHandler } from "./node/CalendarHandler";
+import { ContactsHandler } from "./node/ContactsHandler";
+import { PhotosHandler } from "./node/PhotosHandler";
 import { LocationHandler } from "./node/LocationHandler";
+import { MotionHandler } from "./node/MotionHandler";
 import { NotificationsHandler } from "./node/NotificationsHandler";
 import { CanvasWebHost, OpenClawCanvasA2UIBridge } from "./canvas/CanvasWebHost";
 import { CanvasInvokeHandler } from "./canvas/CanvasInvokeHandler";
@@ -500,7 +508,11 @@ export class NodeRuntime {
           new DeviceHandler(this.context),
           new SystemHandler(),
           new CameraHandler(this.context, () => this.foregroundActive),
+          new CalendarHandler(this.context),
+          new ContactsHandler(this.context),
+          new PhotosHandler(this.context),
           new LocationHandler(this.context, () => this.foregroundActive),
+          new MotionHandler(this.context),
           new NotificationsHandler(this.context),
           this.makeCanvasInvokeHandler(),
         );
@@ -558,14 +570,23 @@ export class NodeRuntime {
   }
 
   private async buildNodeConnectOptions(): Promise<GatewayConnectOptions> {
+    const motionActivityAvailable = MotionHandler.isActivityAvailable();
+    const motionPedometerAvailable = MotionHandler.isPedometerAvailable();
+    const motionAvailable = motionActivityAvailable || motionPedometerAvailable;
     const caps: string[] = [
       OpenClawCapability.Device,
       OpenClawCapability.System,
       OpenClawCapability.Canvas,
+      OpenClawCapability.Calendar,
       OpenClawCapability.Camera,
+      OpenClawCapability.Contacts,
+      OpenClawCapability.Photos,
       OpenClawCapability.Location,
       OpenClawCapability.Notifications,
     ];
+    if (motionAvailable) {
+      caps.push(OpenClawCapability.Motion);
+    }
     const commands: string[] = [
       OpenClawDeviceCommand.Status,
       OpenClawDeviceCommand.Info,
@@ -575,9 +596,13 @@ export class NodeRuntime {
       OpenClawCameraCommand.List,
       OpenClawCameraCommand.Snap,
       OpenClawCameraCommand.Clip,
+      OpenClawCalendarCommand.Events,
+      OpenClawCalendarCommand.Add,
+      OpenClawContactsCommand.Search,
+      OpenClawContactsCommand.Add,
+      OpenClawPhotosCommand.Latest,
       OpenClawLocationCommand.Get,
       OpenClawNotificationsCommand.List,
-      OpenClawNotificationsCommand.Actions,
       OpenClawCanvasCommand.Present,
       OpenClawCanvasCommand.Hide,
       OpenClawCanvasCommand.Navigate,
@@ -587,6 +612,12 @@ export class NodeRuntime {
       OpenClawCanvasA2UICommand.PushJSONL,
       OpenClawCanvasA2UICommand.Reset,
     ];
+    if (motionActivityAvailable) {
+      commands.push(OpenClawMotionCommand.Activity);
+    }
+    if (motionPedometerAvailable) {
+      commands.push(OpenClawMotionCommand.Pedometer);
+    }
     const permissions: NodePermissionsShape = {
       camera: this.hasAnyPermission(["ohos.permission.CAMERA"]),
       location: this.hasAnyPermission([
