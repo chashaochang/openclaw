@@ -10,6 +10,7 @@ import {
   resolveScannedSetupCode,
   composeGatewayManualUrl,
 } from '../common/GatewaySetupCode';
+import { GatewayDiscovery, type GatewayEndpointInfo } from '../gateway/GatewayDiscovery';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { promptAction } from '@kit.ArkUI';
 
@@ -43,6 +44,9 @@ export struct ConnectTabScreen {
   @State scanning: boolean = false;
   @State validationText: string = '';
   @State advancedOpen: boolean = false;
+  @State discoveredGateways: GatewayEndpointInfo[] = [];
+  @State discoveryStatusText: string = 'Searching for gateways…';
+  private gatewayDiscovery: GatewayDiscovery | null = null;
 
   private setupResolvedEndpoint(): string {
     const decoded = decodeGatewaySetupCode(this.setupCodeInput.trim());
@@ -75,6 +79,34 @@ export struct ConnectTabScreen {
         this.inputMode = 'manual';
       }
     });
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (ctx) {
+      if (this.gatewayDiscovery === null) {
+        this.gatewayDiscovery = new GatewayDiscovery(ctx);
+      }
+      this.gatewayDiscovery.start((endpoints, statusText) => {
+        this.discoveredGateways = endpoints;
+        this.discoveryStatusText = statusText;
+      });
+    } else {
+      this.discoveryStatusText = 'Gateway discovery unavailable';
+    }
+  }
+
+  aboutToDisappear(): void {
+    this.gatewayDiscovery?.stop();
+  }
+
+  private discoveredEndpointLabel(entry: GatewayEndpointInfo): string {
+    return `${entry.host}:${entry.port} · ${entry.useTls ? 'TLS' : 'TCP'}`;
+  }
+
+  private applyDiscoveredEndpoint(entry: GatewayEndpointInfo): void {
+    this.inputMode = 'manual';
+    this.hostInput = entry.host;
+    this.portInput = String(entry.port);
+    this.useTls = entry.useTls;
+    this.validationText = '';
   }
 
   private async doScan(): Promise<void> {
@@ -215,6 +247,70 @@ export struct ConnectTabScreen {
         }
         .alignItems(HorizontalAlign.Start)
         .width('100%')
+
+        Column({ space: 8 }) {
+          Row() {
+            Column({ space: 2 }) {
+              Text($r('app.string.connect_discovery_title'))
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#17181C')
+              Text($r('app.string.connect_discovery_subtitle'))
+                .fontSize(12)
+                .fontColor('#4D5563')
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+            Text(this.discoveryStatusText)
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#1D5DD8')
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Top)
+
+          if (this.discoveredGateways.length === 0) {
+            Text($r('app.string.connect_discovery_empty'))
+              .fontSize(13)
+              .fontColor('#8A92A2')
+          } else {
+            ForEach(this.discoveredGateways, (entry: GatewayEndpointInfo) => {
+              Row({ space: 12 }) {
+                Column({ space: 2 }) {
+                  Text(entry.name)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#17181C')
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(this.discoveredEndpointLabel(entry))
+                    .fontSize(12)
+                    .fontColor('#8A92A2')
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Button($r('app.string.connect_discovery_use'))
+                  .height(34)
+                  .fontSize(12)
+                  .fontWeight(FontWeight.Bold)
+                  .backgroundColor('#1D5DD8')
+                  .fontColor(Color.White)
+                  .borderRadius(12)
+                  .onClick(() => {
+                    this.applyDiscoveredEndpoint(entry);
+                  })
+              }
+              .width('100%')
+              .padding({ top: 6, bottom: 6 })
+            }, (entry: GatewayEndpointInfo) => entry.stableId)
+          }
+        }
+        .width('100%')
+        .padding(14)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(14)
+        .border({ width: 1, color: '#E5E7EC' })
+        .alignItems(HorizontalAlign.Start)
 
         Column({ space: 4 }) {
           Text($r('app.string.connect_active_endpoint'))

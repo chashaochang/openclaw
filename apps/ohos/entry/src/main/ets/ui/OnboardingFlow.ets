@@ -17,6 +17,7 @@ import {
 import type { GatewayEndpointConfig } from '../common/GatewaySetupCode';
 import { NodeRuntime } from '../NodeRuntime';
 import { MotionHandler } from '../node/MotionHandler';
+import { LocationMode } from '../LocationMode';
 
 type OnboardingStep = 'welcome' | 'gateway' | 'permissions' | 'finalCheck';
 type GatewayInputMode = 'setupCode' | 'manual';
@@ -109,6 +110,7 @@ export struct OnboardingFlow {
     this.statusText = this.nodeRuntime.getStatusText();
     this.isConnected = this.nodeRuntime.getIsConnected();
     this.remoteAddress = this.nodeRuntime.getRemoteAddress();
+    void this.loadSavedFeatureSelections();
     void this.refreshPermissionStates();
   }
 
@@ -142,7 +144,19 @@ export struct OnboardingFlow {
     }
   }
 
-  private goNext(): void {
+  private async loadSavedFeatureSelections(): Promise<void> {
+    this.enableCamera = await this.nodeRuntime.getCameraEnabled();
+    this.enableLocation = (await this.nodeRuntime.getLocationMode()) !== LocationMode.Off;
+  }
+
+  private async persistSelectedFeatureSettings(): Promise<void> {
+    await Promise.all([
+      this.nodeRuntime.setCameraEnabled(this.enableCamera),
+      this.nodeRuntime.setLocationMode(this.enableLocation ? LocationMode.WhileUsing : LocationMode.Off),
+    ]);
+  }
+
+  private async goNext(): Promise<void> {
     if (this.step === 'welcome') {
       this.step = 'gateway';
       return;
@@ -182,6 +196,7 @@ export struct OnboardingFlow {
       return;
     }
     if (this.step === 'permissions') {
+      await this.persistSelectedFeatureSettings();
       this.step = 'finalCheck';
       return;
     }
@@ -228,6 +243,7 @@ export struct OnboardingFlow {
   }
 
   private async doFinish(): Promise<void> {
+    await this.persistSelectedFeatureSettings();
     await this.requestSelectedPermissions();
     await this.nodeRuntime.setOnboardingCompleted(true);
   }
@@ -855,7 +871,9 @@ export struct OnboardingFlow {
             .fontSize(16)
             .fontWeight(FontWeight.Bold)
             .backgroundColor('#1D5DD8')
-            .onClick(() => this.goNext())
+            .onClick(() => {
+              void this.goNext();
+            })
         } else if (this.step === 'finalCheck') {
           if (this.isConnected) {
             Button($r('app.string.common_finish'))

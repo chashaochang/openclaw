@@ -31,6 +31,12 @@ export default class EntryAbility extends UIAbility {
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
+    const runtime = AppStorage.get<NodeRuntime>('nodeRuntime');
+    if (runtime) {
+      void windowStage.getMainWindow().then((mainWindow) => {
+        runtime.bindMainWindow(mainWindow);
+      });
+    }
 
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
@@ -44,6 +50,8 @@ export default class EntryAbility extends UIAbility {
   onWindowStageDestroy(): void {
     // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
+    const runtime = AppStorage.get<NodeRuntime>('nodeRuntime');
+    runtime?.unbindMainWindow();
   }
 
   onForeground(): void {

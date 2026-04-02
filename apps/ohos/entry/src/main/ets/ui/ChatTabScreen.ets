@@ -2,7 +2,7 @@
  * Chat tab: matches Android ChatSheetContent structure and styling.
  * Session/connection row, error rail, message list with bubbles, composer.
  */
-import { common } from '@kit.AbilityKit';
+import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
@@ -12,10 +12,27 @@ import { NodeRuntime } from '../NodeRuntime';
 import { CHAT_ATTACHMENT_MAX_COUNT, pickAndEncodeChatImages, toOutgoingImageAttachments } from '../chat/ChatImageAttach';
 import type { ChatMessage, ChatMessageContent, ChatPendingAttachment, ChatPendingToolCall, ChatSessionEntry } from '../chat/ChatModels';
 import { friendlyChipLabel, resolveSessionChoices, friendlySessionKeyLabel } from '../chat/SessionChips';
+import type { VoiceUiState } from '../voice/VoiceModels';
 import { HMRouter, HMRouterMgr } from '@hadss/hmrouter';
 
 const CHAT_INLINE_IMAGE_MAX_EDGE = 1280;
 const CHAT_INLINE_IMAGE_MAX_HEIGHT = 240;
+
+function defaultVoiceUiState(): VoiceUiState {
+  const s: VoiceUiState = {
+    micEnabled: false,
+    micCooldown: false,
+    speakerEnabled: true,
+    canCancel: false,
+    liveTranscript: '',
+    queuedMessages: [],
+    conversation: [],
+    isSending: false,
+    activityLabel: 'Mic off',
+    statusDetail: 'Mic off',
+  };
+  return s;
+}
 
 export interface ChatTabState {
   messages: ChatMessage[];
@@ -103,9 +120,12 @@ function titleCaseWords(raw: string): string {
 @Component
 export struct ChatTabScreen {
   @Prop isConnected: boolean;
-  @Prop showBackButton?: boolean;
+  @Prop showBackButton: boolean = true;
   @StorageLink('nodeRuntime') nodeRuntime: NodeRuntime = AppStorage.get<NodeRuntime>('nodeRuntime') as NodeRuntime;
   @State chatState: ChatTabState = defaultChatTabState();
+  @State voiceState: VoiceUiState = defaultVoiceUiState();
+  @State hasMicPermission: boolean = false;
+  @State voicePanelExpanded: boolean = false;
   @State inputText: string = '';
   @State pendingAttachments: ChatPendingAttachment[] = [];
   @State plusMenuVisible: boolean = false;
@@ -238,13 +258,21 @@ export struct ChatTabScreen {
 
   aboutToAppear(): void {
     this.attachChatListener();
+    this.attachVoiceListener();
+    this.refreshMicPermission();
     this.scheduleScrollChatListToEnd();
     this.markdownController.setTextSize(12);
+    this.nodeRuntime.setVoiceScreenActive(true);
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
     } catch {
       // best-effort
     }
+  }
+
+  onPageShow(): void {
+    this.refreshMicPermission();
+    this.nodeRuntime.setVoiceScreenActive(true);
   }
 
   aboutToDisappear(): void {
@@ -253,6 +281,11 @@ export struct ChatTabScreen {
       chat.removeListener(this.chatListenerId);
       this.chatListenerId = -1;
     }
+    if (this.voiceState.micEnabled) {
+      void this.nodeRuntime.setVoiceMicEnabled(false);
+    }
+    this.nodeRuntime.setVoiceUiListener(null);
+    this.nodeRuntime.setVoiceScreenActive(false);
     this.closeImagePreview();
     this.releaseAllInlineImages();
     try {
@@ -286,6 +319,14 @@ export struct ChatTabScreen {
     });
   }
 
+  private attachVoiceListener(): void {
+    this.nodeRuntime.setVoiceUiListener((state: VoiceUiState) => {
+      setTimeout(() => {
+        this.voiceState = state;
+      }, 0);
+    });
+  }
+
   private sessionChipRows(): ChatSessionEntry[] {
     return resolveSessionChoices(
       this.chatState.sessionKey,
@@ -313,11 +354,196 @@ export struct ChatTabScreen {
     return friendlySessionKeyLabel(key.length > 0 ? key : 'main');
   }
 
+  private refreshMicPermission(): void {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      this.hasMicPermission = false;
+      return;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    try {
+      const tokenId = ctx.applicationInfo.accessTokenId;
+      const status = at.checkAccessTokenSync(tokenId, 'ohos.permission.MICROPHONE');
+      this.hasMicPermission = status === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+    } catch {
+      this.hasMicPermission = false;
+    }
+  }
+
+  private async requestMicAndEnable(): Promise<void> {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    const mic: Permissions = 'ohos.permission.MICROPHONE';
+    try {
+      const result = await at.requestPermissionsFromUser(ctx, [mic]);
+      const granted =
+        result.authResults.length > 0 &&
+        result.authResults.every((r) => r === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED);
+      this.hasMicPermission = granted;
+      if (granted) {
+        this.refreshMicPermission();
+        this.nodeRuntime.setVoiceScreenActive(true);
+        await this.nodeRuntime.setVoiceMicEnabled(true);
+      }
+    } catch {
+      this.hasMicPermission = false;
+    }
+  }
+
+  private openAppSettings(): void {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return;
+    }
+    try {
+      void ctx.startAbility({
+        bundleName: 'com.huawei.hmos.settings',
+        abilityName: 'com.huawei.hmos.settings.MainAbility',
+        uri: 'application_info_entry',
+      });
+    } catch {
+      // best-effort
+    }
+  }
+
+  private voicePanelVisible(): boolean {
+    return this.voicePanelExpanded ||
+      this.voiceState.micEnabled ||
+      this.voiceState.micCooldown ||
+      this.voiceState.isSending ||
+      this.voiceState.liveTranscript.trim().length > 0;
+  }
+
+  private voiceStatusChipBackground(): string {
+    if (this.voiceState.micEnabled) {
+      return '#E8F5E9';
+    }
+    if (this.voiceState.isSending) {
+      return '#ECF3FF';
+    }
+    if (this.voiceState.micCooldown) {
+      return '#FFF4E5';
+    }
+    return '#F6F7FA';
+  }
+
+  private voiceStatusChipBorder(): string {
+    if (this.voiceState.micEnabled) {
+      return 'rgba(47, 140, 90, 0.28)';
+    }
+    if (this.voiceState.isSending) {
+      return 'rgba(29, 93, 216, 0.24)';
+    }
+    if (this.voiceState.micCooldown) {
+      return 'rgba(200, 132, 26, 0.24)';
+    }
+    return '#E5E7EC';
+  }
+
+  private voiceStatusChipTextColor(): string {
+    if (this.voiceState.micEnabled) {
+      return '#2F8C5A';
+    }
+    if (this.voiceState.isSending) {
+      return '#1D5DD8';
+    }
+    if (this.voiceState.micCooldown) {
+      return '#C8841A';
+    }
+    return '#4D5563';
+  }
+
+  private voiceMicButtonBackground(): string {
+    if (this.voiceState.micCooldown) {
+      return '#D6DAE2';
+    }
+    return this.voiceState.micEnabled ? '#dc3545' : '#FFFFFF';
+  }
+
+  private voiceMicButtonBorder(): string {
+    if (this.voiceState.micEnabled) {
+      return '#C53143';
+    }
+    if (this.voiceState.micCooldown) {
+      return '#D6DAE2';
+    }
+    return '#D6DAE2';
+  }
+
+  private voiceMicButtonIconColor(): string {
+    if (this.voiceState.micEnabled) {
+      return '#FFFFFF';
+    }
+    if (this.voiceState.micCooldown) {
+      return '#99A0AE';
+    }
+    return '#1D5DD8';
+  }
+
+  private voiceHintText(): string {
+    if (!this.hasMicPermission) {
+      return this.resStr($r('app.string.voice_mic_permission_rationale'));
+    }
+    if (this.voiceState.liveTranscript.trim().length > 0) {
+      return this.voiceState.liveTranscript.trim();
+    }
+    if (this.voiceState.micEnabled) {
+      return this.resStr($r('app.string.voice_hint_mic_stop_send'));
+    }
+    if (this.voiceState.micCooldown) {
+      return 'Finishing capture…';
+    }
+    if (this.voiceState.isSending) {
+      return 'Sending your voice turn…';
+    }
+    const detail = this.voiceState.statusDetail.trim();
+    if (detail.length > 0 && detail !== 'Mic off') {
+      return detail;
+    }
+    return this.resStr($r('app.string.voice_hint_tap_mic'));
+  }
+
+  private voiceAuxiliaryText(): string {
+    const detail = this.voiceState.statusDetail.trim();
+    const activity = this.voiceState.activityLabel.trim();
+    if (detail.length === 0 || detail === activity || detail === this.voiceHintText()) {
+      return '';
+    }
+    return detail;
+  }
+
+  private async cancelVoiceSend(): Promise<void> {
+    this.voicePanelExpanded = false;
+    await this.nodeRuntime.cancelVoicePendingTurn();
+  }
+
+  private async toggleVoiceMic(): Promise<void> {
+    if (this.voiceState.micCooldown) {
+      return;
+    }
+    this.plusMenuVisible = false;
+    this.voicePanelExpanded = true;
+    this.refreshMicPermission();
+    this.nodeRuntime.setVoiceScreenActive(true);
+    if (this.voiceState.micEnabled) {
+      await this.nodeRuntime.setVoiceMicEnabled(false);
+      return;
+    }
+    if (this.hasMicPermission) {
+      await this.nodeRuntime.setVoiceMicEnabled(true);
+      return;
+    }
+    await this.requestMicAndEnable();
+  }
+
   @Builder
   ChatHeader() {
     Column({ space: 0 }) {
       Row() {
-        if (this.showBackButton !== false) {
+        if (this.showBackButton) {
           Button() {
             Row({ space: 4 }) {
               Text('‹')
@@ -353,7 +579,7 @@ export struct ChatTabScreen {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
         .layoutWeight(1)
-        .padding({ left: this.showBackButton !== false ? 8 : 0, right: 10 })
+        .padding({ left: this.showBackButton ? 8 : 0, right: 10 })
         .alignItems(HorizontalAlign.Start)
 
         Row() {
@@ -380,6 +606,110 @@ export struct ChatTabScreen {
     }
     .width('100%')
     .backgroundColor('#FFFFFF')
+  }
+
+  @Builder
+  VoiceComposerTray() {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
+        Row({ space: 6 }) {
+          SymbolGlyph(this.voiceState.micEnabled ? $r('sys.symbol.mic_fill') : $r('sys.symbol.mic_slash_fill'))
+            .fontSize(15)
+            .fontColor([this.voiceStatusChipTextColor()])
+          Text(this.voiceState.activityLabel)
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.voiceStatusChipTextColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor(this.voiceStatusChipBackground())
+        .borderRadius(999)
+        .border({ width: 1, color: this.voiceStatusChipBorder() })
+
+        Blank()
+
+        Button() {
+          SymbolGlyph(this.voiceState.speakerEnabled ? $r('sys.symbol.speaker_fill') :
+            $r('sys.symbol.speaker_slash_fill'))
+            .fontSize(16)
+            .fontColor([this.voiceState.speakerEnabled ? '#1D5DD8' : '#8A92A2'])
+        }
+        .width(34)
+        .height(34)
+        .backgroundColor(this.voiceState.speakerEnabled ? '#ECF3FF' : '#F6F7FA')
+        .borderRadius(17)
+        .border({ width: 1, color: this.voiceState.speakerEnabled ? '#CFE0FF' : '#E5E7EC' })
+        .onClick(() => {
+          void this.nodeRuntime.setVoiceSpeakerEnabled(!this.voiceState.speakerEnabled);
+        })
+
+        if (!this.voiceState.micEnabled && !this.voiceState.isSending && !this.voiceState.micCooldown) {
+          Button() {
+            SymbolGlyph($r('sys.symbol.chevron_down'))
+              .fontSize(16)
+              .fontColor(['#8A92A2'])
+          }
+          .width(34)
+          .height(34)
+          .backgroundColor('#F6F7FA')
+          .borderRadius(17)
+          .border({ width: 1, color: '#E5E7EC' })
+          .onClick(() => {
+            this.voicePanelExpanded = false;
+          })
+        }
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Text(this.voiceHintText())
+        .fontSize(13)
+        .fontColor(this.hasMicPermission ? '#17181C' : '#C8841A')
+        .width('100%')
+
+      if (this.voiceAuxiliaryText().length > 0) {
+        Text(this.voiceAuxiliaryText())
+          .fontSize(11)
+          .fontColor('#8A92A2')
+          .width('100%')
+      }
+
+      if (this.voiceState.canCancel) {
+        Button('Cancel')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#dc3545')
+          .backgroundColor('#FFF1F3')
+          .borderRadius(12)
+          .border({ width: 1, color: '#F3C7CE' })
+          .height(36)
+          .width('100%')
+          .onClick(() => {
+            void this.cancelVoiceSend();
+          })
+      }
+
+      if (!this.hasMicPermission) {
+        Button(this.resStr($r('app.string.voice_open_settings')))
+          .fontSize(13)
+          .fontColor(Color.White)
+          .backgroundColor('#4D5563')
+          .borderRadius(12)
+          .height(36)
+          .width('100%')
+          .onClick(() => {
+            this.openAppSettings();
+          })
+      }
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E5E7EC' })
+    .alignItems(HorizontalAlign.Start)
   }
 
   private toolLabel(name: string): string {
@@ -1322,7 +1652,26 @@ export struct ChatTabScreen {
                 .width('100%')
               }
 
+              if (this.voicePanelVisible()) {
+                this.VoiceComposerTray()
+              }
+
               Row({ space: 6 }) {
+                Button() {
+                  SymbolGlyph(this.voiceState.micEnabled ? $r('sys.symbol.mic_slash_fill') : $r('sys.symbol.mic_fill'))
+                    .fontSize(20)
+                    .fontColor([this.voiceMicButtonIconColor()])
+                }
+                .width(42)
+                .height(42)
+                .backgroundColor(this.voiceMicButtonBackground())
+                .borderRadius(12)
+                .border({ width: 1, color: this.voiceMicButtonBorder() })
+                .enabled(!this.voiceState.micCooldown)
+                .onClick(() => {
+                  void this.toggleVoiceMic();
+                })
+
                 TextInput({
                   placeholder: $r('app.string.chat_input_placeholder'),
                   text: this.inputText

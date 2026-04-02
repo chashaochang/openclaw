@@ -1,12 +1,10 @@
 /**
- * Tab container: Connect, Chat, Voice, Screen, Settings.
- * Matches Android PostOnboardingTabs tab order and chrome.
+ * Tab container: Connect, Chat, Screen, Settings.
+ * Voice entry now lives inside chat detail instead of the bottom tab bar.
  */
 import { NodeRuntime } from '../NodeRuntime';
 import { ConnectTabScreen } from './ConnectTabScreen';
 import { ChatSessionListScreen } from './ChatSessionListScreen';
-import { ChatTabScreen } from './ChatTabScreen';
-import { VoiceTabScreen } from './VoiceTabScreen';
 import { ScreenTabScreen } from './ScreenTabScreen';
 import { SettingsTabScreen } from './SettingsTabScreen';
 import { HMRouter } from '@hadss/hmrouter';
@@ -41,9 +39,6 @@ export struct PostOnboardingTabs {
     this.isConnected = this.nodeRuntime.getIsConnected();
     this.remoteAddress = this.nodeRuntime.getRemoteAddress();
     if (this.activeTab === 2) {
-      this.nodeRuntime.setVoiceScreenActive(true);
-    }
-    if (this.activeTab === 3) {
       this.screenTabStarted = true;
     }
   }
@@ -90,15 +85,8 @@ export struct PostOnboardingTabs {
     .borderRadius(16)
     .border(this.activeTab === index ? { width: 1, color: '#D5E2FA' } : { width: 0, color: '#00000000' })
     .onClick(() => {
-      const prev = this.activeTab;
       this.activeTab = index;
-      if (prev === 2) {
-        this.nodeRuntime.setVoiceScreenActive(false);
-      }
       if (index === 2) {
-        this.nodeRuntime.setVoiceScreenActive(true);
-      }
-      if (index === 3) {
         this.screenTabStarted = true;
         void this.nodeRuntime.refreshHomeCanvasOverviewIfConnected();
       }
@@ -139,7 +127,7 @@ export struct PostOnboardingTabs {
         if (this.screenTabStarted) {
           ScreenTabScreen({
             isConnected: this.isConnected,
-            visible: this.activeTab === 3,
+            visible: this.activeTab === 2,
           })
         }
         if (this.activeTab === 0) {
@@ -154,16 +142,13 @@ export struct PostOnboardingTabs {
             isConnected: this.isConnected,
           })
         }
-        if (this.activeTab === 2) {
-          VoiceTabScreen({ statusText: this.statusText })
-        }
-        if (this.activeTab === 3 && !this.screenTabStarted) {
+        if (this.activeTab === 2 && !this.screenTabStarted) {
           ScreenTabScreen({
             isConnected: this.isConnected,
             visible: true,
           })
         }
-        if (this.activeTab === 4) {
+        if (this.activeTab === 3) {
           SettingsTabScreen()
         }
       }
@@ -174,9 +159,8 @@ export struct PostOnboardingTabs {
       Row({ space: 6 }) {
         this.TabItem($r('app.string.tab_connect'), $r('sys.symbol.checkmark_circle_fill'), 0)
         this.TabItem($r('app.string.tab_chat'), $r('sys.symbol.message_on_message_fill'), 1)
-        this.TabItem($r('app.string.tab_voice'), $r('sys.symbol.mic_fill'), 2)
-        this.TabItem($r('app.string.tab_screen'), $r('sys.symbol.screen_share_fill'), 3)
-        this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape_fill'), 4)
+        this.TabItem($r('app.string.tab_screen'), $r('sys.symbol.screen_share_fill'), 2)
+        this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape_fill'), 3)
       }
       .width('100%')
       .padding({ left: 10, right: 10, top: 10, bottom: 10 })

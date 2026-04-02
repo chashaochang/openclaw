@@ -73,13 +73,16 @@ function toFiniteNumber(value: SafeValue): number | null {
 export class LocationHandler {
   private context: common.UIAbilityContext;
   private isForeground: () => boolean;
+  private locationPreciseEnabled: () => boolean;
 
   constructor(
     context: common.UIAbilityContext,
     isForeground: () => boolean,
+    locationPreciseEnabled: () => boolean,
   ) {
     this.context = context;
     this.isForeground = isForeground;
+    this.locationPreciseEnabled = locationPreciseEnabled;
   }
 
   hasFineLocationPermission(): boolean {
@@ -107,7 +110,11 @@ export class LocationHandler {
     }
 
     const parsed = this.parseLocationParams(paramsJson);
-    const isPrecise = this.resolvePreciseMode(parsed.desiredAccuracy, fineGranted);
+    const isPrecise = this.resolvePreciseMode(
+      parsed.desiredAccuracy,
+      fineGranted,
+      this.locationPreciseEnabled(),
+    );
     const request = this.buildLocationRequest(parsed.timeoutMs, isPrecise);
 
     try {
@@ -215,14 +222,18 @@ export class LocationHandler {
     }
   }
 
-  private resolvePreciseMode(desiredAccuracy: string | null, fineGranted: boolean): boolean {
+  private resolvePreciseMode(
+    desiredAccuracy: string | null,
+    fineGranted: boolean,
+    preciseEnabled: boolean,
+  ): boolean {
     if (desiredAccuracy === 'coarse') {
       return false;
     }
     if (desiredAccuracy === 'precise') {
-      return fineGranted;
+      return preciseEnabled && fineGranted;
     }
-    return fineGranted;
+    return preciseEnabled && fineGranted;
   }
 
   private buildLocationRequest(timeoutMs: number, isPrecise: boolean): geoLocationManager.CurrentLocationRequest {

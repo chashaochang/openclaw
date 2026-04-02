@@ -57,6 +57,8 @@ export class InvokeDispatcher {
   private locationHandler: LocationHandler;
   private motionHandler: MotionHandler;
   private notificationsHandler: NotificationsHandler;
+  private cameraEnabled: () => boolean;
+  private locationEnabled: () => boolean;
   private canvasHandler: CanvasInvokeHandler | null;
 
   constructor(
@@ -69,6 +71,8 @@ export class InvokeDispatcher {
     locationHandler: LocationHandler,
     motionHandler: MotionHandler,
     notificationsHandler: NotificationsHandler,
+    cameraEnabled: () => boolean,
+    locationEnabled: () => boolean,
     canvasHandler: CanvasInvokeHandler | null = null,
   ) {
     this.deviceHandler = deviceHandler;
@@ -80,7 +84,29 @@ export class InvokeDispatcher {
     this.locationHandler = locationHandler;
     this.motionHandler = motionHandler;
     this.notificationsHandler = notificationsHandler;
+    this.cameraEnabled = cameraEnabled;
+    this.locationEnabled = locationEnabled;
     this.canvasHandler = canvasHandler;
+  }
+
+  private availabilityError(command: string): InvokeResult | null {
+    if (
+      command === OpenClawCameraCommand.List ||
+      command === OpenClawCameraCommand.Snap ||
+      command === OpenClawCameraCommand.Clip
+    ) {
+      if (this.cameraEnabled()) {
+        return null;
+      }
+      return errResult('CAMERA_DISABLED', 'CAMERA_DISABLED: enable Camera in Settings');
+    }
+    if (command === OpenClawLocationCommand.Get) {
+      if (this.locationEnabled()) {
+        return null;
+      }
+      return errResult('LOCATION_DISABLED', 'LOCATION_DISABLED: enable Location in Settings');
+    }
+    return null;
   }
 
   async handleInvoke(request: InvokeRequest): Promise<InvokeResult> {
@@ -94,6 +120,10 @@ export class InvokeDispatcher {
     }
     if (!SUPPORTED_COMMANDS.has(command)) {
       return errResult('INVALID_REQUEST', 'INVALID_REQUEST: unknown command');
+    }
+    const availabilityErr = this.availabilityError(command);
+    if (availabilityErr !== null) {
+      return availabilityErr;
     }
     if (command === OpenClawDeviceCommand.Status) {
       return this.deviceHandler.handleDeviceStatus(paramsJson);

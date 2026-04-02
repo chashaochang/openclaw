@@ -18,6 +18,7 @@ export interface VoiceUiState {
   micEnabled: boolean;
   micCooldown: boolean;
   speakerEnabled: boolean;
+  canCancel: boolean;
   liveTranscript: string;
   queuedMessages: string[];
   conversation: VoiceConversationEntry[];

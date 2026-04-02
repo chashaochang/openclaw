@@ -6,6 +6,7 @@ import { promptAction } from '@kit.ArkUI';
 import { notificationExtensionSubscription, notificationManager } from '@kit.NotificationKit';
 import { NodeRuntime } from '../NodeRuntime';
 import { MotionHandler } from '../node/MotionHandler';
+import { LocationMode } from '../LocationMode';
 
 interface StatusChipColorSet {
   bg: string;
@@ -26,7 +27,11 @@ export struct SettingsTabScreen {
   @State manualPort: string = '';
   @State manualTls: boolean = false;
   @State voiceSpeakerOn: boolean = true;
+  @State cameraEnabled: boolean = true;
   @State canvasDebugOn: boolean = false;
+  @State locationMode: LocationMode = LocationMode.Off;
+  @State locationPreciseEnabled: boolean = true;
+  @State preventSleep: boolean = true;
   @State hasMicPermission: boolean = false;
   @State hasCameraPermission: boolean = false;
   @State hasLocationPermission: boolean = false;
@@ -179,7 +184,11 @@ export struct SettingsTabScreen {
     this.connectionStatusText = this.nodeRuntime.getStatusText();
     this.remoteAddress = this.nodeRuntime.getRemoteAddress();
     this.voiceSpeakerOn = this.nodeRuntime.getVoiceSpeakerEnabled();
+    this.cameraEnabled = await this.nodeRuntime.getCameraEnabled();
     this.canvasDebugOn = await this.nodeRuntime.getCanvasDebugEnabled();
+    this.locationMode = await this.nodeRuntime.getLocationMode();
+    this.locationPreciseEnabled = await this.nodeRuntime.getLocationPreciseEnabled();
+    this.preventSleep = await this.nodeRuntime.getPreventSleep();
     this.refreshMicPermission();
     this.refreshCameraPermission();
     this.refreshLocationPermission();
@@ -267,6 +276,61 @@ export struct SettingsTabScreen {
     } catch {
       this.refreshLocationPermission();
     }
+  }
+
+  private hasFineLocationPermission(): boolean {
+    return this.readPermissionGranted(['ohos.permission.LOCATION']);
+  }
+
+  private async requestPreciseLocation(): Promise<boolean> {
+    const ok = await this.requestSimplePermission(['ohos.permission.LOCATION']);
+    this.refreshLocationPermission();
+    return ok && this.hasFineLocationPermission();
+  }
+
+  private async setCameraEnabledChecked(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      this.cameraEnabled = false;
+      await this.nodeRuntime.setCameraEnabled(false);
+      return;
+    }
+    if (!this.hasCameraPermission) {
+      await this.requestCamera();
+    }
+    const resolved = this.hasCameraPermission;
+    this.cameraEnabled = resolved;
+    await this.nodeRuntime.setCameraEnabled(resolved);
+  }
+
+  private async setLocationModeChecked(mode: LocationMode): Promise<void> {
+    if (mode === LocationMode.Off) {
+      this.locationMode = LocationMode.Off;
+      await this.nodeRuntime.setLocationMode(LocationMode.Off);
+      return;
+    }
+    if (!this.hasLocationPermission) {
+      await this.requestLocation();
+    }
+    const resolved = this.hasLocationPermission ? LocationMode.WhileUsing : LocationMode.Off;
+    this.locationMode = resolved;
+    await this.nodeRuntime.setLocationMode(resolved);
+  }
+
+  private async setPreciseLocationChecked(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      this.locationPreciseEnabled = false;
+      await this.nodeRuntime.setLocationPreciseEnabled(false);
+      return;
+    }
+    if (this.locationMode === LocationMode.Off) {
+      return;
+    }
+    let resolved = this.hasFineLocationPermission();
+    if (!resolved) {
+      resolved = await this.requestPreciseLocation();
+    }
+    this.locationPreciseEnabled = resolved;
+    await this.nodeRuntime.setLocationPreciseEnabled(resolved);
   }
 
   private async requestPhotos(): Promise<void> {
@@ -560,6 +624,53 @@ export struct SettingsTabScreen {
 
           Row() {
             Column({ space: 4 }) {
+              Text($r('app.string.settings_feature_camera'))
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#17181C')
+              Text($r('app.string.settings_feature_camera_subtitle'))
+                .fontSize(13)
+                .fontColor('#8A92A2')
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+            Toggle({ type: ToggleType.Switch, isOn: this.cameraEnabled })
+              .selectedColor('#1D5DD8')
+              .onChange((v: boolean) => {
+                void this.setCameraEnabledChecked(v);
+              })
+          }
+          .width('100%')
+          .padding({ top: 12, bottom: 12 })
+
+          Divider().strokeWidth(1).color('#E5E7EC').width('100%')
+
+          Row() {
+            Column({ space: 4 }) {
+              Text($r('app.string.settings_prevent_sleep'))
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#17181C')
+              Text($r('app.string.settings_prevent_sleep_subtitle'))
+                .fontSize(13)
+                .fontColor('#8A92A2')
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+            Toggle({ type: ToggleType.Switch, isOn: this.preventSleep })
+              .selectedColor('#1D5DD8')
+              .onChange((v: boolean) => {
+                this.preventSleep = v;
+                void this.nodeRuntime.setPreventSleep(v);
+              })
+          }
+          .width('100%')
+          .padding({ top: 12, bottom: 12 })
+
+          Divider().strokeWidth(1).color('#E5E7EC').width('100%')
+
+          Row() {
+            Column({ space: 4 }) {
               Text($r('app.string.settings_canvas_debug'))
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
@@ -582,6 +693,75 @@ export struct SettingsTabScreen {
         }
         .width('100%')
         .padding({ left: 14, right: 14 })
+        .backgroundColor('#FFFFFF')
+        .borderRadius(14)
+        .border({ width: 1, color: '#E5E7EC' })
+        .alignItems(HorizontalAlign.Start)
+
+        this.SectionHeader($r('app.string.settings_section_location'))
+
+        Column({ space: 10 }) {
+          Row({ space: 8 }) {
+            Button($r('app.string.settings_location_off'))
+              .layoutWeight(1)
+              .height(42)
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .backgroundColor(this.locationMode === LocationMode.Off ? '#1D5DD8' : '#F6F7FA')
+              .fontColor(this.locationMode === LocationMode.Off ? Color.White : '#4D5563')
+              .borderRadius(12)
+              .onClick(() => {
+                void this.setLocationModeChecked(LocationMode.Off);
+              })
+
+            Button($r('app.string.settings_location_while_using'))
+              .layoutWeight(1)
+              .height(42)
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .backgroundColor(this.locationMode === LocationMode.WhileUsing ? '#1D5DD8' : '#F6F7FA')
+              .fontColor(this.locationMode === LocationMode.WhileUsing ? Color.White : '#4D5563')
+              .borderRadius(12)
+              .onClick(() => {
+                void this.setLocationModeChecked(LocationMode.WhileUsing);
+              })
+          }
+          .width('100%')
+
+          Text(
+            this.locationMode === LocationMode.Off ?
+              $r('app.string.settings_location_off_subtitle') :
+              $r('app.string.settings_location_while_using_subtitle')
+          )
+            .fontSize(13)
+            .fontColor('#8A92A2')
+
+          Divider().strokeWidth(1).color('#E5E7EC').width('100%')
+
+          Row() {
+            Column({ space: 4 }) {
+              Text($r('app.string.settings_location_precise'))
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#17181C')
+              Text($r('app.string.settings_location_precise_subtitle'))
+                .fontSize(13)
+                .fontColor('#8A92A2')
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+            Toggle({ type: ToggleType.Switch, isOn: this.locationPreciseEnabled })
+              .selectedColor('#1D5DD8')
+              .enabled(this.locationMode !== LocationMode.Off)
+              .onChange((v: boolean) => {
+                void this.setPreciseLocationChecked(v);
+              })
+          }
+          .width('100%')
+          .padding({ top: 2, bottom: 2 })
+        }
+        .width('100%')
+        .padding(14)
         .backgroundColor('#FFFFFF')
         .borderRadius(14)
         .border({ width: 1, color: '#E5E7EC' })

@@ -2,6 +2,7 @@
  * Node runtime: gateway, chat, invoke. Central app state.
  */
 import { abilityAccessCtrl, common, Permissions } from "@kit.AbilityKit";
+import { window } from "@kit.ArkUI";
 import { deviceInfo } from "@kit.BasicServicesKit";
 import {
   OpenClawCapability,
@@ -43,6 +44,7 @@ import {
   type A2UIUserActionMap,
 } from "./canvas/OpenClawCanvasA2UIAction";
 import { VoiceCoordinator, type VoiceStateListener } from "./voice/VoiceCoordinator";
+import { LocationMode, locationModeFromRaw } from "./LocationMode";
 
 const CLIENT_ID = "openclaw-android";
 const VERSION = "1.0.0";
@@ -76,6 +78,10 @@ export interface NodeStatus {
 }
 
 export class NodeRuntime {
+  private static readonly CAMERA_ENABLED_KEY = "camera.enabled";
+  private static readonly LOCATION_MODE_KEY = "location.enabledMode";
+  private static readonly LOCATION_PRECISE_ENABLED_KEY = "location.preciseEnabled";
+  private static readonly PREVENT_SLEEP_KEY = "screen.preventSleep";
   private context: common.UIAbilityContext;
   private prefs: SecurePrefs;
   private identityStore: DeviceIdentityStore;
@@ -88,8 +94,13 @@ export class NodeRuntime {
   private _isConnected = false;
   private _remoteAddress = "";
   private _onboardingCompleted = false;
+  private _cameraEnabled = true;
+  private _locationMode: LocationMode = LocationMode.Off;
+  private _locationPreciseEnabled = true;
+  private _preventSleep = true;
   private _onboardingListener: ((completed: boolean) => void) | null = null;
   private foregroundActive = true;
+  private mainWindow: window.Window | null = null;
   private canvasWebHost: CanvasWebHost = new CanvasWebHost();
   private a2uiBridge: OpenClawCanvasA2UIBridge;
   private voiceCoordinator: VoiceCoordinator;
@@ -107,6 +118,16 @@ export class NodeRuntime {
       this._onboardingCompleted = v;
       this._onboardingListener?.(v);
     });
+    void this.hydrateFeaturePrefs();
+  }
+
+  private async hydrateFeaturePrefs(): Promise<void> {
+    await Promise.all([
+      this.getCameraEnabled(),
+      this.getLocationMode(),
+      this.getLocationPreciseEnabled(),
+      this.getPreventSleep(),
+    ]);
   }
 
   getCanvasWebHost(): CanvasWebHost {
@@ -336,6 +357,92 @@ export class NodeRuntime {
     this.syncCanvasDebugOverlay();
   }
 
+  async getCameraEnabled(): Promise<boolean> {
+    const enabled = await this.prefs.getBooleanOr(NodeRuntime.CAMERA_ENABLED_KEY, true);
+    this._cameraEnabled = enabled;
+    return enabled;
+  }
+
+  getCameraEnabledSync(): boolean {
+    return this._cameraEnabled;
+  }
+
+  async setCameraEnabled(enabled: boolean): Promise<void> {
+    this._cameraEnabled = enabled;
+    await this.prefs.putBoolean(NodeRuntime.CAMERA_ENABLED_KEY, enabled);
+  }
+
+  async getLocationMode(): Promise<LocationMode> {
+    const raw = await this.prefs.getString(NodeRuntime.LOCATION_MODE_KEY);
+    const mode = locationModeFromRaw(raw);
+    this._locationMode = mode;
+    if (raw !== mode) {
+      await this.prefs.putString(NodeRuntime.LOCATION_MODE_KEY, mode);
+    }
+    return mode;
+  }
+
+  getLocationModeSync(): LocationMode {
+    return this._locationMode;
+  }
+
+  async setLocationMode(mode: LocationMode): Promise<void> {
+    this._locationMode = mode;
+    await this.prefs.putString(NodeRuntime.LOCATION_MODE_KEY, mode);
+  }
+
+  async getLocationPreciseEnabled(): Promise<boolean> {
+    const enabled = await this.prefs.getBooleanOr(NodeRuntime.LOCATION_PRECISE_ENABLED_KEY, true);
+    this._locationPreciseEnabled = enabled;
+    return enabled;
+  }
+
+  getLocationPreciseEnabledSync(): boolean {
+    return this._locationPreciseEnabled;
+  }
+
+  async setLocationPreciseEnabled(enabled: boolean): Promise<void> {
+    this._locationPreciseEnabled = enabled;
+    await this.prefs.putBoolean(NodeRuntime.LOCATION_PRECISE_ENABLED_KEY, enabled);
+  }
+
+  async getPreventSleep(): Promise<boolean> {
+    const enabled = await this.prefs.getBooleanOr(NodeRuntime.PREVENT_SLEEP_KEY, true);
+    this._preventSleep = enabled;
+    return enabled;
+  }
+
+  getPreventSleepSync(): boolean {
+    return this._preventSleep;
+  }
+
+  async setPreventSleep(enabled: boolean): Promise<void> {
+    this._preventSleep = enabled;
+    await this.prefs.putBoolean(NodeRuntime.PREVENT_SLEEP_KEY, enabled);
+    await this.applyPreventSleepToWindow();
+  }
+
+  bindMainWindow(mainWindow: window.Window): void {
+    this.mainWindow = mainWindow;
+    void this.applyPreventSleepToWindow();
+  }
+
+  unbindMainWindow(): void {
+    this.mainWindow = null;
+  }
+
+  private async applyPreventSleepToWindow(): Promise<void> {
+    const mainWindow = this.mainWindow;
+    if (!mainWindow) {
+      return;
+    }
+    try {
+      await mainWindow.setWindowKeepScreenOn(this._preventSleep);
+    } catch {
+      // Best-effort only; keep the preference even if the API is unavailable on this build.
+    }
+  }
+
   setVoiceUiListener(listener: VoiceStateListener | null): void {
     this.voiceCoordinator.setUiListener(listener);
   }
@@ -346,6 +453,10 @@ export class NodeRuntime {
 
   async setVoiceSpeakerEnabled(enabled: boolean): Promise<void> {
     await this.voiceCoordinator.setSpeakerEnabled(enabled);
+  }
+
+  async cancelVoicePendingTurn(): Promise<void> {
+    await this.voiceCoordinator.cancelPendingTurn();
   }
 
   getVoiceSpeakerEnabled(): boolean {
@@ -511,9 +622,15 @@ export class NodeRuntime {
           new CalendarHandler(this.context),
           new ContactsHandler(this.context),
           new PhotosHandler(this.context),
-          new LocationHandler(this.context, () => this.foregroundActive),
+          new LocationHandler(
+            this.context,
+            () => this.foregroundActive,
+            () => this.getLocationPreciseEnabledSync(),
+          ),
           new MotionHandler(this.context),
           new NotificationsHandler(this.context),
+          () => this.getCameraEnabledSync(),
+          () => this.getLocationModeSync() !== LocationMode.Off,
           this.makeCanvasInvokeHandler(),
         );
         return dispatcher.handleInvoke(req);
@@ -573,17 +690,24 @@ export class NodeRuntime {
     const motionActivityAvailable = MotionHandler.isActivityAvailable();
     const motionPedometerAvailable = MotionHandler.isPedometerAvailable();
     const motionAvailable = motionActivityAvailable || motionPedometerAvailable;
+    const cameraEnabled = await this.getCameraEnabled();
+    const locationMode = await this.getLocationMode();
+    const locationEnabled = locationMode !== LocationMode.Off;
     const caps: string[] = [
       OpenClawCapability.Device,
       OpenClawCapability.System,
       OpenClawCapability.Canvas,
       OpenClawCapability.Calendar,
-      OpenClawCapability.Camera,
       OpenClawCapability.Contacts,
       OpenClawCapability.Photos,
-      OpenClawCapability.Location,
       OpenClawCapability.Notifications,
     ];
+    if (cameraEnabled) {
+      caps.push(OpenClawCapability.Camera);
+    }
+    if (locationEnabled) {
+      caps.push(OpenClawCapability.Location);
+    }
     if (motionAvailable) {
       caps.push(OpenClawCapability.Motion);
     }
@@ -593,15 +717,11 @@ export class NodeRuntime {
       OpenClawDeviceCommand.Permissions,
       OpenClawDeviceCommand.Health,
       OpenClawSystemCommand.Notify,
-      OpenClawCameraCommand.List,
-      OpenClawCameraCommand.Snap,
-      OpenClawCameraCommand.Clip,
       OpenClawCalendarCommand.Events,
       OpenClawCalendarCommand.Add,
       OpenClawContactsCommand.Search,
       OpenClawContactsCommand.Add,
       OpenClawPhotosCommand.Latest,
-      OpenClawLocationCommand.Get,
       OpenClawNotificationsCommand.List,
       OpenClawCanvasCommand.Present,
       OpenClawCanvasCommand.Hide,
@@ -612,6 +732,16 @@ export class NodeRuntime {
       OpenClawCanvasA2UICommand.PushJSONL,
       OpenClawCanvasA2UICommand.Reset,
     ];
+    if (cameraEnabled) {
+      commands.push(
+        OpenClawCameraCommand.List,
+        OpenClawCameraCommand.Snap,
+        OpenClawCameraCommand.Clip,
+      );
+    }
+    if (locationEnabled) {
+      commands.push(OpenClawLocationCommand.Get);
+    }
     if (motionActivityAvailable) {
       commands.push(OpenClawMotionCommand.Activity);
     }
@@ -619,8 +749,8 @@ export class NodeRuntime {
       commands.push(OpenClawMotionCommand.Pedometer);
     }
     const permissions: NodePermissionsShape = {
-      camera: this.hasAnyPermission(["ohos.permission.CAMERA"]),
-      location: this.hasAnyPermission([
+      camera: cameraEnabled && this.hasAnyPermission(["ohos.permission.CAMERA"]),
+      location: locationEnabled && this.hasAnyPermission([
         "ohos.permission.APPROXIMATELY_LOCATION",
         "ohos.permission.LOCATION",
       ]),

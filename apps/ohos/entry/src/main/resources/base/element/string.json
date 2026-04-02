@@ -229,6 +229,22 @@
       "value": "Active endpoint"
     },
     {
+      "name": "connect_discovery_title",
+      "value": "Discovered gateways"
+    },
+    {
+      "name": "connect_discovery_subtitle",
+      "value": "Nearby gateways on your local network."
+    },
+    {
+      "name": "connect_discovery_empty",
+      "value": "No gateways found yet."
+    },
+    {
+      "name": "connect_discovery_use",
+      "value": "Use"
+    },
+    {
       "name": "connect_gateway_state",
       "value": "Gateway state"
     },
@@ -485,6 +501,22 @@
       "value": "Voice speaker"
     },
     {
+      "name": "settings_feature_camera",
+      "value": "Camera"
+    },
+    {
+      "name": "settings_feature_camera_subtitle",
+      "value": "Photos and short video clips while OpenClaw stays in the foreground."
+    },
+    {
+      "name": "settings_prevent_sleep",
+      "value": "Prevent sleep"
+    },
+    {
+      "name": "settings_prevent_sleep_subtitle",
+      "value": "Keep the screen awake while OpenClaw stays open."
+    },
+    {
       "name": "settings_voice_speaker_subtitle",
       "value": "Speak assistant replies on the Voice tab when audio is available."
     },
@@ -499,6 +531,34 @@
     {
       "name": "settings_section_permissions",
       "value": "PERMISSIONS"
+    },
+    {
+      "name": "settings_section_location",
+      "value": "LOCATION"
+    },
+    {
+      "name": "settings_location_off",
+      "value": "Off"
+    },
+    {
+      "name": "settings_location_off_subtitle",
+      "value": "Disable location sharing."
+    },
+    {
+      "name": "settings_location_while_using",
+      "value": "While Using"
+    },
+    {
+      "name": "settings_location_while_using_subtitle",
+      "value": "Only while OpenClaw stays open."
+    },
+    {
+      "name": "settings_location_precise",
+      "value": "Precise location"
+    },
+    {
+      "name": "settings_location_precise_subtitle",
+      "value": "Use precise GPS when HarmonyOS allows it."
     },
     {
       "name": "settings_permission_microphone",

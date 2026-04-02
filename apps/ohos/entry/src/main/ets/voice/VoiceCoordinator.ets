@@ -78,6 +78,8 @@ export class VoiceCoordinator {
   private liveTranscript = '';
   private statusDetail = 'Mic off';
   private messageQueue: string[] = [];
+  private queuedConversationEntryIds: string[] = [];
+  private activeUserEntryId: string | null = null;
   private sessionSegments: string[] = [];
   private lastFinalSegment: string | null = null;
   private conversation: VoiceConversationEntry[] = [];
@@ -155,6 +157,58 @@ export class VoiceCoordinator {
 
   getSpeakerEnabled(): boolean {
     return this.speakerEnabled;
+  }
+
+  async cancelPendingTurn(): Promise<void> {
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'cancelPendingTurn requested');
+    const chat = this.getChat();
+    const shouldAbortRun = this.pendingRunId !== null || this.isSending;
+    const shouldStopRecognizer = this.micEnabled || this.micCooldown;
+
+    if (this.drainTimer >= 0) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = -1;
+    }
+    this.clearPendingRunTimer();
+
+    const idsToRemove: string[] = [];
+    if (this.activeUserEntryId !== null) {
+      idsToRemove.push(this.activeUserEntryId);
+    }
+    for (let i = 0; i < this.queuedConversationEntryIds.length; i++) {
+      idsToRemove.push(this.queuedConversationEntryIds[i]);
+    }
+    if (this.pendingAssistantEntryId !== null) {
+      idsToRemove.push(this.pendingAssistantEntryId);
+    }
+
+    this.playbackToken += 1;
+    this.micEnabled = false;
+    this.micCooldown = false;
+    this.liveTranscript = '';
+    this.sessionSegments = [];
+    this.lastFinalSegment = null;
+    this.messageQueue = [];
+    this.queuedConversationEntryIds = [];
+    this.activeUserEntryId = null;
+    this.pendingRunId = null;
+    this.pendingAssistantEntryId = null;
+    this.isSending = false;
+
+    if (shouldStopRecognizer) {
+      await this.asr.stop();
+    }
+    await this.tts.stop();
+    if (shouldAbortRun && chat) {
+      try {
+        chat.abort();
+      } catch {
+        // best-effort
+      }
+    }
+    this.removeConversationEntries(idsToRemove);
+    this.refreshStatusDetail();
+    this.notifyUi();
   }
 
   /** When false (user left Voice tab), stop TTS so replies do not play in background. */
@@ -432,8 +486,9 @@ export class VoiceCoordinator {
       return;
     }
     hilog.info(LOG_DOMAIN, LOG_TAG, 'flushSessionToQueue message=%{public}s', message);
-    this.appendConversation(VoiceConversationRole.User, message, false);
+    const conversationId = this.appendConversation(VoiceConversationRole.User, message, false);
     this.messageQueue.push(message);
+    this.queuedConversationEntryIds.push(conversationId);
     hilog.info(LOG_DOMAIN, LOG_TAG, 'messageQueue size=%{public}d', this.messageQueue.length);
     this.notifyUi();
     this.sendQueuedIfIdle();
@@ -464,6 +519,7 @@ export class VoiceCoordinator {
     const next = this.messageQueue[0];
     hilog.info(LOG_DOMAIN, LOG_TAG, 'sendQueuedIfIdle sending message=%{public}s', next);
     const runKey = randomId();
+    this.activeUserEntryId = this.queuedConversationEntryIds.length > 0 ? this.queuedConversationEntryIds.shift() ?? null : null;
     this.isSending = true;
     this.pendingRunId = runKey;
     this.armPendingRunTimeout(runKey);
@@ -486,6 +542,7 @@ export class VoiceCoordinator {
         this.isSending = false;
         this.pendingRunId = null;
         this.pendingAssistantEntryId = null;
+        this.activeUserEntryId = null;
         this.refreshStatusDetail();
         this.notifyUi();
         this.sendQueuedIfIdle();
@@ -505,6 +562,7 @@ export class VoiceCoordinator {
       this.isSending = false;
       this.pendingRunId = null;
       this.pendingAssistantEntryId = null;
+      this.activeUserEntryId = null;
       this.statusDetail = `Send failed: ${err.message}`;
       this.refreshStatusDetail();
       this.notifyUi();
@@ -541,6 +599,7 @@ export class VoiceCoordinator {
     }
     this.pendingRunId = null;
     this.pendingAssistantEntryId = null;
+    this.activeUserEntryId = null;
     this.isSending = false;
     this.sendQueuedIfIdle();
     this.refreshStatusDetail();
@@ -600,6 +659,16 @@ export class VoiceCoordinator {
     this.uiListener?.(this.snapshotUi());
   }
 
+  private canCancel(): boolean {
+    return this.micEnabled ||
+      this.micCooldown ||
+      this.isSending ||
+      this.liveTranscript.trim().length > 0 ||
+      this.sessionSegments.length > 0 ||
+      this.messageQueue.length > 0 ||
+      this.pendingRunId !== null;
+  }
+
   private snapshotUi(): VoiceUiState {
     const q = this.messageQueue.slice();
     const c = this.conversation.slice();
@@ -607,6 +676,7 @@ export class VoiceCoordinator {
       micEnabled: this.micEnabled,
       micCooldown: this.micCooldown,
       speakerEnabled: this.speakerEnabled,
+      canCancel: this.canCancel(),
       liveTranscript: this.liveTranscript,
       queuedMessages: q,
       conversation: c,
@@ -655,6 +725,30 @@ export class VoiceCoordinator {
     };
     copy[targetIndex] = updated;
     this.conversation = copy;
+  }
+
+  private removeConversationEntries(ids: string[]): void {
+    if (ids.length === 0 || this.conversation.length === 0) {
+      return;
+    }
+    const removeSet = new Set<string>();
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      if (id && id.length > 0) {
+        removeSet.add(id);
+      }
+    }
+    if (removeSet.size === 0) {
+      return;
+    }
+    const next: VoiceConversationEntry[] = [];
+    for (let i = 0; i < this.conversation.length; i++) {
+      const entry = this.conversation[i];
+      if (!removeSet.has(entry.id)) {
+        next.push(entry);
+      }
+    }
+    this.conversation = next;
   }
 
   private upsertPendingAssistant(text: string, isStreaming: boolean): void {
