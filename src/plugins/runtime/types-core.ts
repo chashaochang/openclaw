@@ -67,20 +67,20 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeech: typeof import("../../tts/runtime.js").textToSpeech;
-    textToSpeechTelephony: typeof import("../../tts/runtime.js").textToSpeechTelephony;
-    listVoices: typeof import("../../tts/runtime.js").listSpeechVoices;
+    textToSpeech: typeof import("../../plugin-sdk/speech-runtime.js").textToSpeech;
+    textToSpeechTelephony: typeof import("../../plugin-sdk/speech-runtime.js").textToSpeechTelephony;
+    listVoices: typeof import("../../plugin-sdk/speech-runtime.js").listSpeechVoices;
   };
   mediaUnderstanding: {
-    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
-    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
-    describeImageFileWithModel: typeof import("../../media-understanding/runtime.js").describeImageFileWithModel;
-    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
-    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+    runFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").runMediaUnderstandingFile;
+    describeImageFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeImageFile;
+    describeImageFileWithModel: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeImageFileWithModel;
+    describeVideoFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeVideoFile;
+    transcribeAudioFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").transcribeAudioFile;
   };
   imageGeneration: {
-    generate: typeof import("../../image-generation/runtime.js").generateImage;
-    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
+    generate: typeof import("../../plugin-sdk/image-generation-runtime.js").generateImage;
+    listProviders: typeof import("../../plugin-sdk/image-generation-runtime.js").listRuntimeImageGenerationProviders;
   };
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
@@ -88,11 +88,6 @@ export type PluginRuntimeCore = {
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
-  };
-  tools: {
-    createMemoryGetTool: typeof import("../../agents/tools/memory-tool.js").createMemoryGetTool;
-    createMemorySearchTool: typeof import("../../agents/tools/memory-tool.js").createMemorySearchTool;
-    registerMemoryCli: typeof import("../../cli/memory-cli.js").registerMemoryCli;
   };
   events: {
     onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
@@ -108,6 +103,10 @@ export type PluginRuntimeCore = {
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
+  tasks: {
+    flow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+  };
+  taskFlow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
   modelAuth: {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {
