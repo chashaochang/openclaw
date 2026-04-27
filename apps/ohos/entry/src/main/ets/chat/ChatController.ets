@@ -561,6 +561,14 @@ export class ChatController {
     return out;
   }
 
+  async requestTalkConfig(): Promise<string | null> {
+    const res = await this.session.request('talk.config', null, 10000);
+    if (!res.ok) {
+      return null;
+    }
+    return res.payloadJson;
+  }
+
   handleGatewayEvent(event: string, payloadJson: string | null): void {
     if (event === 'tick') {
       this.pollHealth();

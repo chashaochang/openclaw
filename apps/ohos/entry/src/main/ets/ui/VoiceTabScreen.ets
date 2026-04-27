@@ -10,6 +10,7 @@ function defaultVoiceUiState(): VoiceUiState {
   const s: VoiceUiState = {
     micEnabled: false,
     micCooldown: false,
+    isSpeaking: false,
     speakerEnabled: true,
     canCancel: false,
     liveTranscript: '',
@@ -59,6 +60,9 @@ export struct VoiceTabScreen {
     if (this.voiceState.micEnabled) {
       return '#E8F5E9';
     }
+    if (this.voiceState.isSpeaking) {
+      return '#FFF4E5';
+    }
     if (this.voiceState.isSending) {
       return '#ECF3FF';
     }
@@ -69,6 +73,9 @@ export struct VoiceTabScreen {
     if (this.voiceState.micEnabled) {
       return 'rgba(47, 140, 90, 0.30)';
     }
+    if (this.voiceState.isSpeaking) {
+      return 'rgba(200, 132, 26, 0.24)';
+    }
     if (this.voiceState.isSending) {
       return 'rgba(29, 93, 216, 0.24)';
     }
@@ -78,6 +85,9 @@ export struct VoiceTabScreen {
   private statusChipTextColor(): string {
     if (this.voiceState.micEnabled) {
       return '#2F8C5A';
+    }
+    if (this.voiceState.isSpeaking) {
+      return '#C8841A';
     }
     if (this.voiceState.isSending) {
       return '#1D5DD8';
@@ -280,7 +290,8 @@ export struct VoiceTabScreen {
 
         Column() {
           Button() {
-            SymbolGlyph(this.voiceState.micEnabled ? $r('sys.symbol.mic_slash_fill') : $r('sys.symbol.mic_fill'))
+            SymbolGlyph(this.voiceState.micEnabled || this.voiceState.canCancel ? $r('sys.symbol.mic_slash_fill') :
+              $r('sys.symbol.mic_fill'))
               .fontSize(26)
               .fontColor([Color.White])
           }
@@ -289,7 +300,8 @@ export struct VoiceTabScreen {
           .borderRadius(30)
           .backgroundColor(this.voiceState.micCooldown ?
             '#8A92A2' :
-            (this.voiceState.micEnabled ? '#dc3545' : '#1D5DD8'))
+            (this.voiceState.isSpeaking ? '#C8841A' : (this.voiceState.micEnabled ? '#dc3545' :
+              (this.voiceState.canCancel ? '#dc3545' : '#1D5DD8'))))
           .enabled(!this.voiceState.micCooldown)
           .onClick(() => {
             if (this.voiceState.micCooldown) {
@@ -299,6 +311,14 @@ export struct VoiceTabScreen {
             this.nodeRuntime.setVoiceScreenActive(true);
             if (this.voiceState.micEnabled) {
               void this.nodeRuntime.setVoiceMicEnabled(false);
+            } else if (this.voiceState.isSpeaking) {
+              if (this.hasMicPermission) {
+                void this.nodeRuntime.setVoiceMicEnabled(true);
+              } else {
+                void this.requestMicAndEnable();
+              }
+            } else if (this.voiceState.canCancel) {
+              void this.nodeRuntime.cancelVoicePendingTurn();
             } else {
               if (this.hasMicPermission) {
                 void this.nodeRuntime.setVoiceMicEnabled(true);

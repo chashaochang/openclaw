@@ -1,5 +1,5 @@
 /**
- * Voice tab: STT, send via chat.send, assistant bubbles + TTS (Android MicCaptureManager parity).
+ * Voice flow shared by chat detail voice controls and wake-word dispatch.
  */
 import { i18n } from '@kit.LocalizationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -13,8 +13,14 @@ import { VoiceConversationEntry, VoiceConversationRole, VoiceUiState } from './V
 
 type JsonRec = Record<string, object | string | number | boolean | null>;
 
+interface TalkConfigState {
+  silenceTimeoutMs: number;
+  interruptOnSpeech: boolean;
+}
+
 const MAX_CONVERSATION = 40;
 const DRAIN_MS = 1400;
+const DEFAULT_SILENCE_TIMEOUT_MS = 700;
 const PENDING_RUN_TIMEOUT_MS = 45000;
 const LOG_DOMAIN = 0x0000;
 const LOG_TAG = 'VoiceFlow';
@@ -62,6 +68,83 @@ function parseAssistantChatText(payload: JsonRec): string | null {
   return parts.join('\n');
 }
 
+function resolveTalkConfigState(payloadJson: string | null): TalkConfigState {
+  if (!payloadJson || payloadJson.trim().length === 0) {
+    return {
+      silenceTimeoutMs: DEFAULT_SILENCE_TIMEOUT_MS,
+      interruptOnSpeech: false,
+    };
+  }
+  try {
+    const root = JSON.parse(payloadJson) as JsonRec;
+    const configRaw = root['config'];
+    const config = configRaw !== null && typeof configRaw === 'object' ? configRaw as JsonRec : root;
+    const talkRaw = config['talk'];
+    if (talkRaw === null || typeof talkRaw !== 'object') {
+      return {
+        silenceTimeoutMs: DEFAULT_SILENCE_TIMEOUT_MS,
+        interruptOnSpeech: false,
+      };
+    }
+    const talk = talkRaw as JsonRec;
+    const timeoutRaw = talk['silenceTimeoutMs'];
+    let silenceTimeoutMs = DEFAULT_SILENCE_TIMEOUT_MS;
+    if (typeof timeoutRaw === 'number' && Number.isFinite(timeoutRaw) && timeoutRaw > 0 &&
+      Math.floor(timeoutRaw) === timeoutRaw) {
+      silenceTimeoutMs = timeoutRaw;
+    }
+    const interruptRaw = talk['interruptOnSpeech'];
+    return {
+      silenceTimeoutMs: silenceTimeoutMs,
+      interruptOnSpeech: interruptRaw === true,
+    };
+  } catch {
+    return {
+      silenceTimeoutMs: DEFAULT_SILENCE_TIMEOUT_MS,
+      interruptOnSpeech: false,
+    };
+  }
+}
+
+function safeElapsedSeconds(startedAtMs: number): number | null {
+  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) {
+    return null;
+  }
+  const elapsedMs = Date.now() - startedAtMs;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return null;
+  }
+  const rounded = Math.round(elapsedMs / 100) / 10;
+  if (!Number.isFinite(rounded) || rounded < 0) {
+    return null;
+  }
+  return rounded;
+}
+
+function buildInterruptedPlaybackNote(seconds: number | null): string | null {
+  if (seconds === null) {
+    return null;
+  }
+  return `Assistant speech interrupted at ${seconds.toFixed(1)}s.`;
+}
+
+function buildTalkModePrompt(transcript: string, interruptedNote: string | null = null): string {
+  const trimmed = transcript.trim();
+  if (trimmed.length === 0) {
+    return '';
+  }
+  const lines: string[] = [
+    'Talk Mode active. Reply in a concise, spoken tone.',
+    'You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {"voice":"<id>","once":true}.',
+  ];
+  if (interruptedNote !== null && interruptedNote.trim().length > 0) {
+    lines.push(interruptedNote.trim());
+  }
+  lines.push('');
+  lines.push(trimmed);
+  return lines.join('\n');
+}
+
 export type VoiceStateListener = (state: VoiceUiState) => void;
 
 export class VoiceCoordinator {
@@ -74,11 +157,15 @@ export class VoiceCoordinator {
 
   private micEnabled = false;
   private micCooldown = false;
+  private isSpeaking = false;
   private speakerEnabled = true;
+  private talkModeEnabled = false;
+  private interruptOnSpeech = false;
   private liveTranscript = '';
   private statusDetail = 'Mic off';
   private messageQueue: string[] = [];
   private queuedConversationEntryIds: string[] = [];
+  private queuedSpeakReplies: boolean[] = [];
   private activeUserEntryId: string | null = null;
   private sessionSegments: string[] = [];
   private lastFinalSegment: string | null = null;
@@ -88,11 +175,19 @@ export class VoiceCoordinator {
   private pendingAssistantEntryId: string | null = null;
   private voiceScreenActive = false;
   private drainTimer: number = -1;
+  private silenceTimer: number = -1;
   private pendingRunTimer: number = -1;
+  private resumeListeningTimer: number = -1;
   private playbackToken = 0;
+  private activeSpeakReply = false;
+  private replyPlaybackActive = false;
+  private replyPlaybackStartedAtMs = 0;
+  private pendingInterruptedPlaybackNote: string | null = null;
+  private silenceTimeoutMs = DEFAULT_SILENCE_TIMEOUT_MS;
   /** Persisted across assistant turns when directives set voice/model without once: true (Android TalkMode parity). */
   private currentVoiceId: string | null = null;
   private currentModelId: string | null = null;
+  private activityListener: (() => void) | null = null;
 
   constructor(
     prefs: SecurePrefs,
@@ -145,18 +240,65 @@ export class VoiceCoordinator {
     }
   }
 
+  setActivityListener(listener: (() => void) | null): void {
+    this.activityListener = listener;
+  }
+
   async setSpeakerEnabled(enabled: boolean): Promise<void> {
     this.speakerEnabled = enabled;
     await this.prefs.putBoolean('voice.speakerEnabled', enabled);
     if (!enabled) {
       this.playbackToken += 1;
+      this.isSpeaking = false;
+      this.replyPlaybackActive = false;
+      this.replyPlaybackStartedAtMs = 0;
       await this.tts.stop();
     }
+    this.refreshStatusDetail();
     this.notifyUi();
   }
 
   getSpeakerEnabled(): boolean {
     return this.speakerEnabled;
+  }
+
+  private clearResumeListeningTimer(): void {
+    if (this.resumeListeningTimer >= 0) {
+      clearTimeout(this.resumeListeningTimer);
+      this.resumeListeningTimer = -1;
+    }
+  }
+
+  private scheduleResumeListening(delayMs: number = 280): void {
+    this.clearResumeListeningTimer();
+    if (!this.talkModeEnabled || !this.voiceScreenActive || !this.getGatewayConnected()) {
+      this.refreshStatusDetail();
+      this.notifyUi();
+      return;
+    }
+    if (this.micEnabled || this.micCooldown || this.isSending || this.replyPlaybackActive) {
+      return;
+    }
+    this.refreshStatusDetail();
+    this.notifyUi();
+    this.resumeListeningTimer = setTimeout(() => {
+      this.resumeListeningTimer = -1;
+      if (!this.talkModeEnabled || !this.voiceScreenActive || !this.getGatewayConnected()) {
+        this.refreshStatusDetail();
+        this.notifyUi();
+        return;
+      }
+      if (this.micEnabled || this.micCooldown || this.isSending || this.replyPlaybackActive) {
+        return;
+      }
+      void this.setMicEnabled(true);
+    }, delayMs) as number;
+  }
+
+  private markInterruptedPlayback(): void {
+    const elapsed = safeElapsedSeconds(this.replyPlaybackStartedAtMs);
+    const note = buildInterruptedPlaybackNote(elapsed);
+    this.pendingInterruptedPlaybackNote = note;
   }
 
   async cancelPendingTurn(): Promise<void> {
@@ -169,7 +311,9 @@ export class VoiceCoordinator {
       clearTimeout(this.drainTimer);
       this.drainTimer = -1;
     }
+    this.clearSilenceTimer();
     this.clearPendingRunTimer();
+    this.clearResumeListeningTimer();
 
     const idsToRemove: string[] = [];
     if (this.activeUserEntryId !== null) {
@@ -185,15 +329,22 @@ export class VoiceCoordinator {
     this.playbackToken += 1;
     this.micEnabled = false;
     this.micCooldown = false;
+    this.isSpeaking = false;
+    this.talkModeEnabled = false;
     this.liveTranscript = '';
     this.sessionSegments = [];
     this.lastFinalSegment = null;
     this.messageQueue = [];
     this.queuedConversationEntryIds = [];
+    this.queuedSpeakReplies = [];
     this.activeUserEntryId = null;
     this.pendingRunId = null;
     this.pendingAssistantEntryId = null;
     this.isSending = false;
+    this.activeSpeakReply = false;
+    this.replyPlaybackActive = false;
+    this.replyPlaybackStartedAtMs = 0;
+    this.pendingInterruptedPlaybackNote = null;
 
     if (shouldStopRecognizer) {
       await this.asr.stop();
@@ -211,16 +362,59 @@ export class VoiceCoordinator {
     this.notifyUi();
   }
 
+  private async reloadTalkConfig(): Promise<void> {
+    const chat = this.getChat();
+    if (!chat || !this.getGatewayConnected()) {
+      this.silenceTimeoutMs = DEFAULT_SILENCE_TIMEOUT_MS;
+      this.interruptOnSpeech = false;
+      return;
+    }
+    try {
+      const payloadJson = await chat.requestTalkConfig();
+      const config = resolveTalkConfigState(payloadJson);
+      this.silenceTimeoutMs = config.silenceTimeoutMs;
+      this.interruptOnSpeech = config.interruptOnSpeech;
+      hilog.info(
+        LOG_DOMAIN,
+        LOG_TAG,
+        'talk.config loaded silenceTimeoutMs=%{public}d interruptOnSpeech=%{public}s',
+        this.silenceTimeoutMs,
+        String(this.interruptOnSpeech),
+      );
+    } catch (err) {
+      this.silenceTimeoutMs = DEFAULT_SILENCE_TIMEOUT_MS;
+      this.interruptOnSpeech = false;
+      hilog.warn(
+        LOG_DOMAIN,
+        LOG_TAG,
+        'talk.config load failed, using defaults err=%{public}s',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
   /** When false (user left Voice tab), stop TTS so replies do not play in background. */
   setVoiceScreenActive(active: boolean): void {
     this.voiceScreenActive = active;
     if (!active) {
+      this.talkModeEnabled = false;
+      this.clearResumeListeningTimer();
       this.playbackToken += 1;
+      this.isSpeaking = false;
+      this.replyPlaybackActive = false;
+      this.replyPlaybackStartedAtMs = 0;
       void this.tts.stop();
     }
+    this.refreshStatusDetail();
+    this.notifyUi();
   }
 
   onGatewayConnectionChanged(_connected: boolean): void {
+    if (!this.getGatewayConnected()) {
+      this.clearResumeListeningTimer();
+    } else if (this.talkModeEnabled && !this.micEnabled && !this.micCooldown && !this.isSending && !this.replyPlaybackActive) {
+      this.scheduleResumeListening(0);
+    }
     this.sendQueuedIfIdle();
     this.refreshStatusDetail();
     this.notifyUi();
@@ -251,29 +445,49 @@ export class VoiceCoordinator {
     }
     if (state === 'final') {
       const finalText = parseAssistantChatText(payload)?.trim() ?? '';
+      const shouldResume = this.talkModeEnabled;
+      const allowBackgroundSpeak = this.activeSpeakReply;
       if (finalText.length > 0) {
         this.upsertPendingAssistant(finalText, false);
-        void this.playAssistantReply(finalText);
-      } else if (this.pendingAssistantEntryId !== null) {
-        this.updateConversationEntry(this.pendingAssistantEntryId, null, false);
+        void this.playAssistantReply(finalText, allowBackgroundSpeak).finally(() => {
+          if (shouldResume) {
+            this.scheduleResumeListening();
+          }
+        });
       }
       this.completePendingTurn();
+      if (finalText.length === 0) {
+        if (this.pendingAssistantEntryId !== null) {
+          this.updateConversationEntry(this.pendingAssistantEntryId, null, false);
+        }
+        if (shouldResume) {
+          this.scheduleResumeListening();
+        }
+      }
       return;
     }
     if (state === 'error') {
       const err = String(payload['errorMessage'] ?? 'Voice request failed').trim() || 'Voice request failed';
+      const shouldResume = this.talkModeEnabled;
       this.upsertPendingAssistant(err, false);
       this.completePendingTurn();
+      if (shouldResume) {
+        this.scheduleResumeListening(900);
+      }
       return;
     }
     if (state === 'aborted') {
+      const shouldResume = this.talkModeEnabled;
       this.upsertPendingAssistant('Response aborted', false);
       this.completePendingTurn();
+      if (shouldResume) {
+        this.scheduleResumeListening(420);
+      }
     }
   }
 
-  private async playAssistantReply(text: string): Promise<void> {
-    if (!this.voiceScreenActive || !this.speakerEnabled) {
+  private async playAssistantReply(text: string, allowBackgroundSpeak: boolean = false): Promise<void> {
+    if (!this.speakerEnabled || (!this.voiceScreenActive && !allowBackgroundSpeak)) {
       return;
     }
     const spoken = text.trim();
@@ -304,48 +518,61 @@ export class VoiceCoordinator {
       }
     }
 
-    this.playbackToken += 1;
-    const token = this.playbackToken;
-    await this.tts.stop();
-    if (token !== this.playbackToken || !this.voiceScreenActive || !this.speakerEnabled) {
-      return;
-    }
-    let spoke = false;
-    const chat = this.getChat();
-    if (chat) {
-      try {
-        const gatewaySpeech: TalkSpeakResult | null = await chat.requestTalkSpeak({
-          text: cleaned,
-          language: this.ttsLanguage(),
-          directive: directive,
-          persistentVoiceId: this.currentVoiceId,
-          persistentModelId: this.currentModelId,
-        });
-        if (token !== this.playbackToken || !this.voiceScreenActive || !this.speakerEnabled) {
-          return;
-        }
-        if (gatewaySpeech && gatewaySpeech.audioBase64.trim().length > 0) {
-          spoke = await this.tts.speakGatewayAudioBase64(
-            gatewaySpeech.audioBase64,
-            gatewaySpeech.mimeType,
-            gatewaySpeech.fileExtension,
-            gatewaySpeech.outputFormat,
-          );
-        }
-      } catch {
-        // fall back to local TTS
-      }
-    }
-    if (token !== this.playbackToken || !this.voiceScreenActive || !this.speakerEnabled) {
-      return;
-    }
-    if (spoke) {
-      return;
-    }
+    this.replyPlaybackActive = true;
+    this.isSpeaking = true;
+    this.replyPlaybackStartedAtMs = Date.now();
+    this.refreshStatusDetail();
+    this.notifyUi();
     try {
-      await this.tts.speak(cleaned, this.ttsLanguage());
-    } catch {
-      // ignore TTS failures
+      this.playbackToken += 1;
+      const token = this.playbackToken;
+      await this.tts.stop();
+      if (token !== this.playbackToken || !this.speakerEnabled || (!this.voiceScreenActive && !allowBackgroundSpeak)) {
+        return;
+      }
+      let spoke = false;
+      const chat = this.getChat();
+      if (chat) {
+        try {
+          const gatewaySpeech: TalkSpeakResult | null = await chat.requestTalkSpeak({
+            text: cleaned,
+            language: this.ttsLanguage(),
+            directive: directive,
+            persistentVoiceId: this.currentVoiceId,
+            persistentModelId: this.currentModelId,
+          });
+          if (token !== this.playbackToken || !this.speakerEnabled || (!this.voiceScreenActive && !allowBackgroundSpeak)) {
+            return;
+          }
+          if (gatewaySpeech && gatewaySpeech.audioBase64.trim().length > 0) {
+            spoke = await this.tts.speakGatewayAudioBase64(
+              gatewaySpeech.audioBase64,
+              gatewaySpeech.mimeType,
+              gatewaySpeech.fileExtension,
+              gatewaySpeech.outputFormat,
+            );
+          }
+        } catch {
+          // fall back to local TTS
+        }
+      }
+      if (token !== this.playbackToken || !this.speakerEnabled || (!this.voiceScreenActive && !allowBackgroundSpeak)) {
+        return;
+      }
+      if (spoke) {
+        return;
+      }
+      try {
+        await this.tts.speak(cleaned, this.ttsLanguage());
+      } catch {
+        // ignore TTS failures
+      }
+    } finally {
+      this.isSpeaking = false;
+      this.replyPlaybackActive = false;
+      this.replyPlaybackStartedAtMs = 0;
+      this.refreshStatusDetail();
+      this.notifyUi();
     }
   }
 
@@ -357,12 +584,22 @@ export class VoiceCoordinator {
     hilog.info(LOG_DOMAIN, LOG_TAG, 'setMicEnabled enabled=%{public}s', String(enabled));
     this.micEnabled = enabled;
     if (enabled) {
+      this.talkModeEnabled = true;
       this.micCooldown = false;
+      this.clearSilenceTimer();
+      this.clearResumeListeningTimer();
       this.refreshStatusDetail();
       this.notifyUi();
       // Release playback before opening the mic — STT + TTS sharing audio trips some devices.
+      if (this.replyPlaybackActive && this.interruptOnSpeech) {
+        this.markInterruptedPlayback();
+      }
       this.playbackToken += 1;
+      this.isSpeaking = false;
+      this.replyPlaybackActive = false;
+      this.replyPlaybackStartedAtMs = 0;
       await this.tts.stop();
+      void this.reloadTalkConfig();
       const started = await this.asr.start(
         (text, isFinal) => {
           hilog.info(LOG_DOMAIN, LOG_TAG, 'asr callback final=%{public}s text=%{public}s', String(isFinal), text);
@@ -377,6 +614,7 @@ export class VoiceCoordinator {
       if (!started) {
         hilog.error(LOG_DOMAIN, LOG_TAG, 'asr start returned false');
         this.micEnabled = false;
+        this.talkModeEnabled = false;
         this.refreshStatusDetail();
         this.notifyUi();
         return;
@@ -385,6 +623,8 @@ export class VoiceCoordinator {
       this.sendQueuedIfIdle();
     } else {
       this.micCooldown = true;
+      this.clearSilenceTimer();
+      this.clearResumeListeningTimer();
       if (this.drainTimer >= 0) {
         clearTimeout(this.drainTimer);
         this.drainTimer = -1;
@@ -426,6 +666,25 @@ export class VoiceCoordinator {
     return this.micCooldown;
   }
 
+  isBusyForVoiceWake(): boolean {
+    return this.canCancel() || this.replyPlaybackActive;
+  }
+
+  async speakWakeCommand(command: string): Promise<void> {
+    const trimmed = command.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+    this.playbackToken += 1;
+    this.isSpeaking = false;
+    this.replyPlaybackActive = false;
+    this.replyPlaybackStartedAtMs = 0;
+    await this.tts.stop();
+    this.refreshStatusDetail();
+    this.notifyUi();
+    this.enqueueMessage(trimmed, true);
+  }
+
   private onRecognizerText(text: string, isFinal: boolean): void {
     const trimmed = text.trim();
     if (trimmed.length === 0) {
@@ -435,12 +694,18 @@ export class VoiceCoordinator {
     hilog.info(LOG_DOMAIN, LOG_TAG, 'onRecognizerText final=%{public}s text=%{public}s', String(isFinal), trimmed);
     if (!isFinal) {
       this.liveTranscript = trimmed;
+      if (this.micEnabled) {
+        this.scheduleSilenceFinalize();
+      }
       this.refreshStatusDetail();
       this.notifyUi();
       return;
     }
     this.liveTranscript = trimmed;
     if (this.lastFinalSegment === trimmed) {
+      if (this.micEnabled) {
+        this.scheduleSilenceFinalize();
+      }
       this.refreshStatusDetail();
       this.notifyUi();
       return;
@@ -458,9 +723,49 @@ export class VoiceCoordinator {
       this.flushSessionToQueue();
       this.micCooldown = false;
       this.sendQueuedIfIdle();
+    } else if (this.micEnabled) {
+      this.scheduleSilenceFinalize();
     }
     this.refreshStatusDetail();
     this.notifyUi();
+  }
+
+  private scheduleSilenceFinalize(): void {
+    if (!this.micEnabled) {
+      return;
+    }
+    const partial = this.liveTranscript.trim();
+    if (partial.length === 0 && this.sessionSegments.length === 0) {
+      return;
+    }
+    this.clearSilenceTimer();
+    const timeoutMs = this.silenceTimeoutMs > 0 ? this.silenceTimeoutMs : DEFAULT_SILENCE_TIMEOUT_MS;
+    this.silenceTimer = setTimeout(() => {
+      this.silenceTimer = -1;
+      if (!this.micEnabled) {
+        return;
+      }
+      const currentPartial = this.liveTranscript.trim();
+      if (currentPartial.length === 0 && this.sessionSegments.length === 0) {
+        return;
+      }
+      hilog.info(
+        LOG_DOMAIN,
+        LOG_TAG,
+        'silence timeout reached; auto-stopping mic timeoutMs=%{public}d partial=%{public}s segments=%{public}d',
+        timeoutMs,
+        currentPartial,
+        this.sessionSegments.length,
+      );
+      void this.setMicEnabled(false);
+    }, timeoutMs) as number;
+  }
+
+  private clearSilenceTimer(): void {
+    if (this.silenceTimer >= 0) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = -1;
+    }
   }
 
   private flushSessionToQueue(): void {
@@ -486,10 +791,21 @@ export class VoiceCoordinator {
       return;
     }
     hilog.info(LOG_DOMAIN, LOG_TAG, 'flushSessionToQueue message=%{public}s', message);
+    this.enqueueMessage(message, false);
+  }
+
+  private enqueueMessage(message: string, speakReply: boolean): void {
     const conversationId = this.appendConversation(VoiceConversationRole.User, message, false);
     this.messageQueue.push(message);
     this.queuedConversationEntryIds.push(conversationId);
-    hilog.info(LOG_DOMAIN, LOG_TAG, 'messageQueue size=%{public}d', this.messageQueue.length);
+    this.queuedSpeakReplies.push(speakReply);
+    hilog.info(
+      LOG_DOMAIN,
+      LOG_TAG,
+      'messageQueue size=%{public}d speakReply=%{public}s',
+      this.messageQueue.length,
+      String(speakReply),
+    );
     this.notifyUi();
     this.sendQueuedIfIdle();
   }
@@ -518,15 +834,18 @@ export class VoiceCoordinator {
     }
     const next = this.messageQueue[0];
     hilog.info(LOG_DOMAIN, LOG_TAG, 'sendQueuedIfIdle sending message=%{public}s', next);
+    const outboundMessage = buildTalkModePrompt(next, this.pendingInterruptedPlaybackNote);
+    this.pendingInterruptedPlaybackNote = null;
     const runKey = randomId();
     this.activeUserEntryId = this.queuedConversationEntryIds.length > 0 ? this.queuedConversationEntryIds.shift() ?? null : null;
+    this.activeSpeakReply = this.queuedSpeakReplies.length > 0 ? this.queuedSpeakReplies.shift() === true : false;
     this.isSending = true;
     this.pendingRunId = runKey;
     this.armPendingRunTimeout(runKey);
     this.refreshStatusDetail();
     this.notifyUi();
     const thinking = chat.getThinkingLevel();
-    void chat.sendMessage(next, thinking, undefined, runKey).then((canonicalRunId: string | null) => {
+    void chat.sendMessage(outboundMessage.length > 0 ? outboundMessage : next, thinking, undefined, runKey).then((canonicalRunId: string | null) => {
       hilog.info(
         LOG_DOMAIN,
         LOG_TAG,
@@ -543,6 +862,7 @@ export class VoiceCoordinator {
         this.pendingRunId = null;
         this.pendingAssistantEntryId = null;
         this.activeUserEntryId = null;
+        this.activeSpeakReply = false;
         this.refreshStatusDetail();
         this.notifyUi();
         this.sendQueuedIfIdle();
@@ -563,6 +883,7 @@ export class VoiceCoordinator {
       this.pendingRunId = null;
       this.pendingAssistantEntryId = null;
       this.activeUserEntryId = null;
+      this.activeSpeakReply = false;
       this.statusDetail = `Send failed: ${err.message}`;
       this.refreshStatusDetail();
       this.notifyUi();
@@ -579,6 +900,7 @@ export class VoiceCoordinator {
       this.pendingRunId = null;
       this.pendingAssistantEntryId = null;
       this.isSending = false;
+      this.activeSpeakReply = false;
       this.refreshStatusDetail();
       this.notifyUi();
       this.sendQueuedIfIdle();
@@ -601,6 +923,7 @@ export class VoiceCoordinator {
     this.pendingAssistantEntryId = null;
     this.activeUserEntryId = null;
     this.isSending = false;
+    this.activeSpeakReply = false;
     this.sendQueuedIfIdle();
     this.refreshStatusDetail();
     this.notifyUi();
@@ -612,12 +935,20 @@ export class VoiceCoordinator {
   }
 
   private refreshStatusDetail(): void {
+    if (this.replyPlaybackActive || this.isSpeaking) {
+      this.statusDetail = this.interruptOnSpeech ? 'Speaking · tap mic to interrupt' : 'Speaking';
+      return;
+    }
     if (this.micCooldown) {
       this.statusDetail = 'Cooldown';
       return;
     }
     if (!this.getGatewayConnected() && this.messageQueue.length > 0) {
       this.statusDetail = this.queuedWaitingLabel();
+      return;
+    }
+    if (!this.getGatewayConnected() && this.talkModeEnabled) {
+      this.statusDetail = 'Talk mode · gateway offline';
       return;
     }
     if (this.isSending && this.micEnabled) {
@@ -636,10 +967,17 @@ export class VoiceCoordinator {
       }
       return;
     }
+    if (this.talkModeEnabled) {
+      this.statusDetail = 'Ready for next turn';
+      return;
+    }
     this.statusDetail = 'Mic off';
   }
 
   private activityLabel(): string {
+    if (this.replyPlaybackActive || this.isSpeaking) {
+      return 'Speaking';
+    }
     if (this.messageQueue.length > 0) {
       return `${this.messageQueue.length} queued`;
     }
@@ -652,17 +990,23 @@ export class VoiceCoordinator {
     if (this.micEnabled) {
       return 'Listening';
     }
+    if (this.talkModeEnabled) {
+      return 'Talk mode';
+    }
     return 'Mic off';
   }
 
   private notifyUi(): void {
     this.uiListener?.(this.snapshotUi());
+    this.activityListener?.();
   }
 
   private canCancel(): boolean {
     return this.micEnabled ||
       this.micCooldown ||
       this.isSending ||
+      this.replyPlaybackActive ||
+      this.talkModeEnabled ||
       this.liveTranscript.trim().length > 0 ||
       this.sessionSegments.length > 0 ||
       this.messageQueue.length > 0 ||
@@ -675,6 +1019,7 @@ export class VoiceCoordinator {
     const s: VoiceUiState = {
       micEnabled: this.micEnabled,
       micCooldown: this.micCooldown,
+      isSpeaking: this.replyPlaybackActive || this.isSpeaking,
       speakerEnabled: this.speakerEnabled,
       canCancel: this.canCancel(),
       liveTranscript: this.liveTranscript,
@@ -768,11 +1113,18 @@ export class VoiceCoordinator {
     this.playbackToken += 1;
     this.micEnabled = false;
     this.micCooldown = false;
+    this.isSpeaking = false;
+    this.talkModeEnabled = false;
+    this.activeSpeakReply = false;
+    this.replyPlaybackActive = false;
+    this.replyPlaybackStartedAtMs = 0;
     if (this.drainTimer >= 0) {
       clearTimeout(this.drainTimer);
       this.drainTimer = -1;
     }
+    this.clearSilenceTimer();
     this.clearPendingRunTimer();
+    this.clearResumeListeningTimer();
     await this.asr.stop();
     await this.tts.stop();
     this.refreshStatusDetail();

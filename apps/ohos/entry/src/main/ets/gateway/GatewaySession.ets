@@ -197,7 +197,8 @@ export class GatewaySession {
     endpoint: GatewayEndpoint,
     token: string | null,
     password: string | null,
-    options: GatewayConnectOptions
+    options: GatewayConnectOptions,
+    certPath: string | null = null,
   ): Promise<void> {
     this.runLoopAbort = false;
     this.connectSucceeded = false;
@@ -214,6 +215,9 @@ export class GatewaySession {
         // Empty headers: native Rust impl does not add Origin (unlike platform API).
         const headers: Record<string, string> = {};
         const config: WebSocketConfig = { headers };
+        if (certPath && certPath.trim().length > 0) {
+          config.certPath = certPath.trim();
+        }
         this.ws = new WebSocket(url, config);
         this.ws.onOpen(() => {
           this.handleOpen(endpoint, token, password, options, remoteAddress)

@@ -101,6 +101,7 @@ export interface OpenClawCapabilityType {
   readonly Location: string;
   readonly Motion: string;
   readonly Notifications: string;
+  readonly VoiceWake: string;
   readonly Device: string;
   readonly Photos: string;
   readonly System: string;
@@ -114,6 +115,7 @@ export const OpenClawCapability: OpenClawCapabilityType = {
   Location: 'location',
   Motion: 'motion',
   Notifications: 'notifications',
+  VoiceWake: 'voiceWake',
   Device: 'device',
   Photos: 'photos',
   System: 'system',

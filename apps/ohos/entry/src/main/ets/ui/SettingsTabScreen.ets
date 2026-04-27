@@ -4,9 +4,14 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
 import { notificationExtensionSubscription, notificationManager } from '@kit.NotificationKit';
+import {
+  normalizeLocalHourMinute,
+  NotificationPackageFilterMode,
+} from '../common/NotificationForwardingPolicy';
 import { NodeRuntime } from '../NodeRuntime';
 import { MotionHandler } from '../node/MotionHandler';
 import { LocationMode } from '../LocationMode';
+import { VoiceWakeMode } from '../voice/VoiceWakeMode';
 
 interface StatusChipColorSet {
   bg: string;
@@ -26,6 +31,10 @@ export struct SettingsTabScreen {
   @State manualHost: string = '';
   @State manualPort: string = '';
   @State manualTls: boolean = false;
+  @State voiceWakeMode: VoiceWakeMode = VoiceWakeMode.Foreground;
+  @State voiceWakeWordsDraft: string = '';
+  @State voiceWakeStatusText: string = 'Off';
+  @State voiceWakeListening: boolean = false;
   @State voiceSpeakerOn: boolean = true;
   @State cameraEnabled: boolean = true;
   @State canvasDebugOn: boolean = false;
@@ -41,6 +50,15 @@ export struct SettingsTabScreen {
   @State hasMotionPermission: boolean = false;
   @State notificationsEnabled: boolean = false;
   @State notificationListenerEnabled: boolean = false;
+  @State notificationForwardingEnabled: boolean = false;
+  @State notificationForwardingMode: NotificationPackageFilterMode = NotificationPackageFilterMode.Blocklist;
+  @State notificationForwardingPackagesCsvDraft: string = '';
+  @State notificationForwardingQuietHoursEnabled: boolean = false;
+  @State notificationForwardingQuietStart: string = '22:00';
+  @State notificationForwardingQuietEnd: string = '07:00';
+  @State notificationForwardingRateDraft: string = '30';
+  @State notificationForwardingSessionKeyDraft: string = '';
+  @State recentNotificationPackages: string[] = [];
   @State refreshBusy: boolean = false;
   private readonly motionAvailable: boolean = MotionHandler.isAvailable();
 
@@ -183,12 +201,29 @@ export struct SettingsTabScreen {
     this.isConnected = this.nodeRuntime.getIsConnected();
     this.connectionStatusText = this.nodeRuntime.getStatusText();
     this.remoteAddress = this.nodeRuntime.getRemoteAddress();
+    this.voiceWakeMode = await this.nodeRuntime.getVoiceWakeMode();
+    this.voiceWakeWordsDraft = await this.nodeRuntime.getVoiceWakeWordsCsv();
+    this.voiceWakeStatusText = this.nodeRuntime.getVoiceWakeStatusText();
+    this.voiceWakeListening = this.nodeRuntime.getVoiceWakeListening();
     this.voiceSpeakerOn = this.nodeRuntime.getVoiceSpeakerEnabled();
     this.cameraEnabled = await this.nodeRuntime.getCameraEnabled();
     this.canvasDebugOn = await this.nodeRuntime.getCanvasDebugEnabled();
     this.locationMode = await this.nodeRuntime.getLocationMode();
     this.locationPreciseEnabled = await this.nodeRuntime.getLocationPreciseEnabled();
     this.preventSleep = await this.nodeRuntime.getPreventSleep();
+    this.notificationForwardingEnabled = await this.nodeRuntime.getNotificationForwardingEnabled();
+    this.notificationForwardingMode = await this.nodeRuntime.getNotificationForwardingMode();
+    this.notificationForwardingPackagesCsvDraft =
+      await this.nodeRuntime.getNotificationForwardingPackagesCsv();
+    this.notificationForwardingQuietHoursEnabled =
+      await this.nodeRuntime.getNotificationForwardingQuietHoursEnabled();
+    this.notificationForwardingQuietStart = await this.nodeRuntime.getNotificationForwardingQuietStart();
+    this.notificationForwardingQuietEnd = await this.nodeRuntime.getNotificationForwardingQuietEnd();
+    this.notificationForwardingRateDraft =
+      String(await this.nodeRuntime.getNotificationForwardingMaxEventsPerMinute());
+    this.notificationForwardingSessionKeyDraft =
+      await this.nodeRuntime.getNotificationForwardingSessionKey();
+    this.recentNotificationPackages = await this.nodeRuntime.getRecentNotificationPackages();
     this.refreshMicPermission();
     this.refreshCameraPermission();
     this.refreshLocationPermission();
@@ -388,6 +423,176 @@ export struct SettingsTabScreen {
     await this.refreshNotificationsEnabled();
   }
 
+  private async setNotificationForwardingEnabledChecked(enabled: boolean): Promise<void> {
+    this.notificationForwardingEnabled = enabled;
+    await this.nodeRuntime.setNotificationForwardingEnabled(enabled);
+  }
+
+  private notificationForwardingControlsEnabled(): boolean {
+    return this.notificationListenerEnabled && this.notificationForwardingEnabled;
+  }
+
+  private async setVoiceWakeModeChecked(mode: VoiceWakeMode): Promise<void> {
+    if (mode !== VoiceWakeMode.Off && !this.hasMicPermission) {
+      await this.requestMic();
+    }
+    if (mode !== VoiceWakeMode.Off && !this.hasMicPermission) {
+      this.voiceWakeMode = VoiceWakeMode.Off;
+      await this.nodeRuntime.setVoiceWakeMode(VoiceWakeMode.Off);
+      await this.reloadFromRuntime();
+      return;
+    }
+    this.voiceWakeMode = mode;
+    await this.nodeRuntime.setVoiceWakeMode(mode);
+    await this.reloadFromRuntime();
+  }
+
+  private async saveVoiceWakeWords(): Promise<void> {
+    await this.nodeRuntime.setVoiceWakeWordsCsv(this.voiceWakeWordsDraft);
+    this.voiceWakeWordsDraft = await this.nodeRuntime.getVoiceWakeWordsCsv();
+    this.voiceWakeStatusText = this.nodeRuntime.getVoiceWakeStatusText();
+    this.voiceWakeListening = this.nodeRuntime.getVoiceWakeListening();
+  }
+
+  private voiceWakeAlwaysNoteVisible(): boolean {
+    return this.voiceWakeMode === VoiceWakeMode.Always;
+  }
+
+  private parseNotificationForwardingPackagesCsv(raw: string): string[] {
+    if (raw.trim().length === 0) {
+      return [];
+    }
+    const parts = raw.split(/[\n,]/);
+    const seen = new Set<string>();
+    const packages: string[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const value = parts[i].trim();
+      if (value.length === 0 || seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      packages.push(value);
+    }
+    return packages;
+  }
+
+  private notificationForwardingPackagesCount(): number {
+    return this.parseNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft).length;
+  }
+
+  private isNotificationForwardingPackageConfigured(packageName: string): boolean {
+    const packages = this.parseNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+    for (let i = 0; i < packages.length; i++) {
+      if (packages[i] === packageName) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async setNotificationForwardingModeChecked(mode: NotificationPackageFilterMode): Promise<void> {
+    this.notificationForwardingMode = mode;
+    await this.nodeRuntime.setNotificationForwardingMode(mode);
+  }
+
+  private async saveNotificationForwardingPackagesCsv(): Promise<void> {
+    const packages = this.parseNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+    this.notificationForwardingPackagesCsvDraft = packages.join(', ');
+    await this.nodeRuntime.setNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+  }
+
+  private async toggleRecentNotificationPackage(packageName: string): Promise<void> {
+    const packages = this.parseNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+    const next: string[] = [];
+    let removed = false;
+    for (let i = 0; i < packages.length; i++) {
+      if (packages[i] === packageName) {
+        removed = true;
+        continue;
+      }
+      next.push(packages[i]);
+    }
+    if (!removed) {
+      next.push(packageName);
+    }
+    this.notificationForwardingPackagesCsvDraft = next.join(', ');
+    await this.nodeRuntime.setNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+  }
+
+  private async saveNotificationForwardingRate(): Promise<void> {
+    const parsed = parseInt(this.notificationForwardingRateDraft.trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      promptAction.showToast({
+        message: this.resStr($r('app.string.settings_notification_forwarding_rate_invalid')),
+      });
+      return;
+    }
+    await this.nodeRuntime.setNotificationForwardingMaxEventsPerMinute(parsed);
+    this.notificationForwardingRateDraft = String(Math.max(1, Math.floor(parsed)));
+  }
+
+  private async saveNotificationForwardingSessionKey(): Promise<void> {
+    await this.nodeRuntime.setNotificationForwardingSessionKey(
+      this.notificationForwardingSessionKeyDraft.trim(),
+    );
+  }
+
+  private async setNotificationForwardingQuietHoursChecked(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      const ok = await this.nodeRuntime.setNotificationForwardingQuietHours(
+        false,
+        this.notificationForwardingQuietStart,
+        this.notificationForwardingQuietEnd,
+      );
+      if (ok) {
+        this.notificationForwardingQuietHoursEnabled = false;
+      }
+      return;
+    }
+    const normalizedStart = normalizeLocalHourMinute(this.notificationForwardingQuietStart);
+    const normalizedEnd = normalizeLocalHourMinute(this.notificationForwardingQuietEnd);
+    if (!normalizedStart || !normalizedEnd) {
+      promptAction.showToast({
+        message: this.resStr($r('app.string.settings_notification_forwarding_quiet_invalid')),
+      });
+      return;
+    }
+    const ok = await this.nodeRuntime.setNotificationForwardingQuietHours(
+      true,
+      normalizedStart,
+      normalizedEnd,
+    );
+    if (ok) {
+      this.notificationForwardingQuietStart = normalizedStart;
+      this.notificationForwardingQuietEnd = normalizedEnd;
+      this.notificationForwardingQuietHoursEnabled = true;
+    }
+  }
+
+  private async saveNotificationForwardingQuietHours(): Promise<void> {
+    const normalizedStart = normalizeLocalHourMinute(this.notificationForwardingQuietStart);
+    const normalizedEnd = normalizeLocalHourMinute(this.notificationForwardingQuietEnd);
+    if (!normalizedStart || !normalizedEnd) {
+      promptAction.showToast({
+        message: this.resStr($r('app.string.settings_notification_forwarding_quiet_invalid')),
+      });
+      return;
+    }
+    const ok = await this.nodeRuntime.setNotificationForwardingQuietHours(
+      this.notificationForwardingQuietHoursEnabled,
+      normalizedStart,
+      normalizedEnd,
+    );
+    if (!ok) {
+      promptAction.showToast({
+        message: this.resStr($r('app.string.settings_notification_forwarding_quiet_invalid')),
+      });
+      return;
+    }
+    this.notificationForwardingQuietStart = normalizedStart;
+    this.notificationForwardingQuietEnd = normalizedEnd;
+  }
+
   private endpointLine(): string {
     const h = (this.manualHost ?? '').trim();
     const p = (this.manualPort ?? '').trim();
@@ -499,6 +704,102 @@ export struct SettingsTabScreen {
       .margin({ top: 8, bottom: 2 })
   }
 
+  @Builder
+  NotificationFilterModeButton(
+    mode: NotificationPackageFilterMode,
+    label: Resource,
+    subtitle: Resource,
+  ) {
+    Button() {
+      Column({ space: 4 }) {
+        Text(label)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.notificationForwardingMode === mode ? '#1D5DD8' : '#17181C')
+        Text(subtitle)
+          .fontSize(11)
+          .fontColor(this.notificationForwardingMode === mode ? '#1D5DD8' : '#8A92A2')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+    }
+      .type(ButtonType.Normal)
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .backgroundColor(this.notificationForwardingMode === mode ? '#ECF3FF' : '#FFFFFF')
+      .borderRadius(12)
+      .border({
+        width: 1,
+        color: this.notificationForwardingMode === mode ? '#BFD5FF' : '#E5E7EC',
+      })
+      .enabled(this.notificationForwardingControlsEnabled())
+      .onClick(() => {
+        void this.setNotificationForwardingModeChecked(mode);
+      })
+  }
+
+  @Builder
+  VoiceWakeModeButton(
+    mode: VoiceWakeMode,
+    label: Resource,
+    subtitle: Resource,
+  ) {
+    Button() {
+      Column({ space: 4 }) {
+        Text(label)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.voiceWakeMode === mode ? '#1D5DD8' : '#17181C')
+        Text(subtitle)
+          .fontSize(11)
+          .fontColor(this.voiceWakeMode === mode ? '#1D5DD8' : '#8A92A2')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+    }
+      .type(ButtonType.Normal)
+      .layoutWeight(1)
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .backgroundColor(this.voiceWakeMode === mode ? '#ECF3FF' : '#FFFFFF')
+      .borderRadius(12)
+      .border({
+        width: 1,
+        color: this.voiceWakeMode === mode ? '#BFD5FF' : '#E5E7EC',
+      })
+      .onClick(() => {
+        void this.setVoiceWakeModeChecked(mode);
+      })
+  }
+
+  @Builder
+  RecentNotificationPackageRow(packageName: string) {
+    Row({ space: 10 }) {
+      Text(packageName)
+        .fontSize(13)
+        .fontColor('#17181C')
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Button(
+        this.isNotificationForwardingPackageConfigured(packageName) ?
+          this.resStr($r('app.string.settings_notification_forwarding_recent_remove')) :
+          this.resStr($r('app.string.settings_notification_forwarding_recent_add')),
+      )
+        .height(32)
+        .padding({ left: 12, right: 12 })
+        .backgroundColor(
+          this.isNotificationForwardingPackageConfigured(packageName) ? '#FFF4E5' : '#EEF1F6',
+        )
+        .fontColor('#17181C')
+        .borderRadius(10)
+        .enabled(this.notificationForwardingControlsEnabled())
+        .onClick(() => {
+          void this.toggleRecentNotificationPackage(packageName);
+        })
+    }
+    .width('100%')
+  }
+
   build() {
     Scroll() {
       Column({ space: 8 }) {
@@ -598,6 +899,92 @@ export struct SettingsTabScreen {
         this.SectionHeader($r('app.string.settings_section_features'))
 
         Column({ space: 0 }) {
+          Column({ space: 12 }) {
+            Row() {
+              Column({ space: 4 }) {
+                Text($r('app.string.settings_voice_wake_title'))
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor('#17181C')
+                Text($r('app.string.settings_voice_wake_subtitle'))
+                  .fontSize(13)
+                  .fontColor('#8A92A2')
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+              Text(this.voiceWakeListening ? this.resStr($r('app.string.settings_voice_wake_status_listening')) : this.voiceWakeStatusText)
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.voiceWakeListening ? '#2F8C5A' : '#4D5563')
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                .backgroundColor(this.voiceWakeListening ? '#E8F5E9' : '#F6F7FA')
+                .borderRadius(999)
+            }
+            .width('100%')
+
+            Row({ space: 10 }) {
+              this.VoiceWakeModeButton(
+                VoiceWakeMode.Off,
+                $r('app.string.settings_voice_wake_mode_off'),
+                $r('app.string.settings_voice_wake_mode_off_sub'),
+              )
+              this.VoiceWakeModeButton(
+                VoiceWakeMode.Foreground,
+                $r('app.string.settings_voice_wake_mode_foreground'),
+                $r('app.string.settings_voice_wake_mode_foreground_sub'),
+              )
+              this.VoiceWakeModeButton(
+                VoiceWakeMode.Always,
+                $r('app.string.settings_voice_wake_mode_always'),
+                $r('app.string.settings_voice_wake_mode_always_sub'),
+              )
+            }
+            .width('100%')
+
+            if (this.voiceWakeAlwaysNoteVisible()) {
+              Text($r('app.string.settings_voice_wake_always_note'))
+                .fontSize(12)
+                .fontColor('#C8841A')
+            }
+
+            Column({ space: 6 }) {
+              Text($r('app.string.settings_voice_wake_words_label'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#4D5563')
+              Text($r('app.string.settings_voice_wake_words_subtitle'))
+                .fontSize(12)
+                .fontColor('#8A92A2')
+              TextInput({
+                placeholder: this.resStr($r('app.string.settings_voice_wake_words_placeholder')),
+                text: this.voiceWakeWordsDraft,
+              })
+                .onChange((value: string) => {
+                  this.voiceWakeWordsDraft = value;
+                })
+                .width('100%')
+                .backgroundColor('#F7F8FA')
+                .borderRadius(12)
+                .border({ width: 1, color: '#E5E7EC' })
+              Button($r('app.string.common_save'))
+                .height(36)
+                .backgroundColor('#EEF1F6')
+                .fontColor('#17181C')
+                .borderRadius(12)
+                .onClick(() => {
+                  void this.saveVoiceWakeWords();
+                })
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }
+          .width('100%')
+          .padding({ top: 12, bottom: 12 })
+
+          Divider().strokeWidth(1).color('#E5E7EC').width('100%')
+
           Row() {
             Column({ space: 4 }) {
               Text($r('app.string.settings_voice_speaker_default'))
@@ -958,6 +1345,264 @@ export struct SettingsTabScreen {
           }
           .width('100%')
           .padding({ top: 12, bottom: 12 })
+
+          Divider().strokeWidth(1).color('#E5E7EC').width('100%')
+
+          Column({ space: 12 }) {
+            Row() {
+              Column({ space: 4 }) {
+                Text($r('app.string.settings_notification_forwarding_title'))
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor('#17181C')
+                Text($r('app.string.settings_notification_forwarding_sub'))
+                  .fontSize(13)
+                  .fontColor('#8A92A2')
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.notificationForwardingEnabled })
+                .selectedColor('#1D5DD8')
+                .enabled(this.notificationListenerEnabled)
+                .onChange((value: boolean) => {
+                  void this.setNotificationForwardingEnabledChecked(value);
+                })
+            }
+            .width('100%')
+            if (!this.notificationListenerEnabled) {
+              Text($r('app.string.settings_notification_forwarding_disabled_hint'))
+                .fontSize(12)
+                .fontColor('#C8841A')
+            }
+
+            Column({ space: 6 }) {
+              Text($r('app.string.settings_notification_forwarding_filter_label'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#4D5563')
+              Row({ space: 10 }) {
+                this.NotificationFilterModeButton(
+                  NotificationPackageFilterMode.Allowlist,
+                  $r('app.string.settings_notification_forwarding_mode_allowlist'),
+                  $r('app.string.settings_notification_forwarding_mode_allowlist_sub'),
+                )
+                this.NotificationFilterModeButton(
+                  NotificationPackageFilterMode.Blocklist,
+                  $r('app.string.settings_notification_forwarding_mode_blocklist'),
+                  $r('app.string.settings_notification_forwarding_mode_blocklist_sub'),
+                )
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+
+            Column({ space: 6 }) {
+              Text($r('app.string.settings_notification_forwarding_packages_label'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#4D5563')
+              Text($r('app.string.settings_notification_forwarding_packages_sub'))
+                .fontSize(12)
+                .fontColor('#8A92A2')
+              TextInput({
+                placeholder: this.resStr($r('app.string.settings_notification_forwarding_packages_placeholder')),
+                text: this.notificationForwardingPackagesCsvDraft,
+              })
+                .enabled(this.notificationForwardingControlsEnabled())
+                .onChange((value: string) => {
+                  this.notificationForwardingPackagesCsvDraft = value;
+                })
+                .width('100%')
+                .backgroundColor('#F7F8FA')
+                .borderRadius(12)
+                .border({ width: 1, color: '#E5E7EC' })
+              Text(
+                this.notificationForwardingPackagesCount() > 0 ?
+                  `${this.notificationForwardingPackagesCount()} configured` :
+                  this.resStr($r('app.string.settings_notification_forwarding_packages_empty')),
+              )
+                .fontSize(11)
+                .fontColor('#8A92A2')
+              Button($r('app.string.common_save'))
+                .height(36)
+                .backgroundColor('#EEF1F6')
+                .fontColor('#17181C')
+                .borderRadius(12)
+                .enabled(this.notificationForwardingControlsEnabled())
+                .onClick(() => {
+                  void this.saveNotificationForwardingPackagesCsv();
+                })
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+
+            Column({ space: 8 }) {
+              Text($r('app.string.settings_notification_forwarding_recent_label'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#4D5563')
+              if (this.recentNotificationPackages.length === 0) {
+                Text($r('app.string.settings_notification_forwarding_recent_empty'))
+                  .fontSize(12)
+                  .fontColor('#8A92A2')
+              } else {
+                ForEach(this.recentNotificationPackages, (packageName: string) => {
+                  this.RecentNotificationPackageRow(packageName)
+                })
+              }
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+
+            Column({ space: 6 }) {
+              Text($r('app.string.settings_notification_forwarding_session_label'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#4D5563')
+              Text($r('app.string.settings_notification_forwarding_session_sub'))
+                .fontSize(12)
+                .fontColor('#8A92A2')
+              TextInput({
+                placeholder: 'main',
+                text: this.notificationForwardingSessionKeyDraft,
+              })
+                .enabled(this.notificationForwardingControlsEnabled())
+                .onChange((value: string) => {
+                  this.notificationForwardingSessionKeyDraft = value;
+                })
+                .width('100%')
+                .backgroundColor('#F7F8FA')
+                .borderRadius(12)
+                .border({ width: 1, color: '#E5E7EC' })
+              Button($r('app.string.common_save'))
+                .height(36)
+                .backgroundColor('#EEF1F6')
+                .fontColor('#17181C')
+                .borderRadius(12)
+                .enabled(this.notificationForwardingControlsEnabled())
+                .onClick(() => {
+                  void this.saveNotificationForwardingSessionKey();
+                })
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+
+            Column({ space: 6 }) {
+              Text($r('app.string.settings_notification_forwarding_rate_label'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#4D5563')
+              Text($r('app.string.settings_notification_forwarding_rate_sub'))
+                .fontSize(12)
+                .fontColor('#8A92A2')
+              Row({ space: 10 }) {
+                TextInput({
+                  placeholder: '30',
+                  text: this.notificationForwardingRateDraft,
+                })
+                  .enabled(this.notificationForwardingControlsEnabled())
+                  .type(InputType.Number)
+                  .onChange((value: string) => {
+                    this.notificationForwardingRateDraft = value.replace(/[^0-9]/g, '');
+                  })
+                  .layoutWeight(1)
+                  .backgroundColor('#F7F8FA')
+                  .borderRadius(12)
+                  .border({ width: 1, color: '#E5E7EC' })
+                Button($r('app.string.common_save'))
+                  .height(36)
+                  .backgroundColor('#EEF1F6')
+                  .fontColor('#17181C')
+                  .borderRadius(12)
+                  .enabled(this.notificationForwardingControlsEnabled())
+                  .onClick(() => {
+                    void this.saveNotificationForwardingRate();
+                  })
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+
+            Column({ space: 6 }) {
+              Row() {
+                Column({ space: 4 }) {
+                  Text($r('app.string.settings_notification_forwarding_quiet_title'))
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#4D5563')
+                  Text($r('app.string.settings_notification_forwarding_quiet_sub'))
+                    .fontSize(12)
+                    .fontColor('#8A92A2')
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.notificationForwardingQuietHoursEnabled })
+                  .selectedColor('#1D5DD8')
+                  .enabled(this.notificationForwardingControlsEnabled())
+                  .onChange((value: boolean) => {
+                    void this.setNotificationForwardingQuietHoursChecked(value);
+                  })
+              }
+              .width('100%')
+              Row({ space: 10 }) {
+                Column({ space: 4 }) {
+                  Text($r('app.string.settings_notification_forwarding_quiet_start'))
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#4D5563')
+                  TextInput({
+                    placeholder: '22:00',
+                    text: this.notificationForwardingQuietStart,
+                  })
+                    .enabled(this.notificationForwardingControlsEnabled())
+                    .onChange((value: string) => {
+                      this.notificationForwardingQuietStart = value;
+                    })
+                    .backgroundColor('#F7F8FA')
+                    .borderRadius(12)
+                    .border({ width: 1, color: '#E5E7EC' })
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+                Column({ space: 4 }) {
+                  Text($r('app.string.settings_notification_forwarding_quiet_end'))
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#4D5563')
+                  TextInput({
+                    placeholder: '07:00',
+                    text: this.notificationForwardingQuietEnd,
+                  })
+                    .enabled(this.notificationForwardingControlsEnabled())
+                    .onChange((value: string) => {
+                      this.notificationForwardingQuietEnd = value;
+                    })
+                    .backgroundColor('#F7F8FA')
+                    .borderRadius(12)
+                    .border({ width: 1, color: '#E5E7EC' })
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+              }
+              .width('100%')
+              Button($r('app.string.common_save'))
+                .height(36)
+                .backgroundColor('#EEF1F6')
+                .fontColor('#17181C')
+                .borderRadius(12)
+                .enabled(this.notificationForwardingControlsEnabled())
+                .onClick(() => {
+                  void this.saveNotificationForwardingQuietHours();
+                })
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }
+          .width('100%')
+          .padding({ top: 12, bottom: 12 })
+          .alignItems(HorizontalAlign.Start)
 
           Divider().strokeWidth(1).color('#E5E7EC').width('100%')
 

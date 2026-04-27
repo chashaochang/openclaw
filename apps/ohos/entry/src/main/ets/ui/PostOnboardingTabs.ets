@@ -7,7 +7,10 @@ import { ConnectTabScreen } from './ConnectTabScreen';
 import { ChatSessionListScreen } from './ChatSessionListScreen';
 import { ScreenTabScreen } from './ScreenTabScreen';
 import { SettingsTabScreen } from './SettingsTabScreen';
+import { CameraHudOverlay } from './CameraHudOverlay';
+import { CameraFlashOverlay } from './CameraFlashOverlay';
 import { HMRouter } from '@hadss/hmrouter';
+import type { CameraHudState } from '../NodeRuntime';
 
 interface StatusChipColors {
   bg: string;
@@ -26,6 +29,8 @@ export struct PostOnboardingTabs {
   @State statusText: string = 'Offline';
   @State isConnected: boolean = false;
   @State remoteAddress: string = '';
+  @State cameraHud: CameraHudState | null = null;
+  @State cameraFlashToken: number = 0;
 
   aboutToAppear(): void {
     this.nodeRuntime.setStatusListener((s) => {
@@ -33,6 +38,20 @@ export struct PostOnboardingTabs {
         this.statusText = s.statusText;
         this.isConnected = s.isConnected;
         this.remoteAddress = s.remoteAddress;
+      }, 0);
+    });
+    this.nodeRuntime.setCameraHudListener((hud) => {
+      setTimeout(() => {
+        this.cameraHud = hud ? {
+          token: hud.token,
+          kind: hud.kind,
+          message: hud.message,
+        } : null;
+      }, 0);
+    });
+    this.nodeRuntime.setCameraFlashListener((token) => {
+      setTimeout(() => {
+        this.cameraFlashToken = token;
       }, 0);
     });
     this.statusText = this.nodeRuntime.getStatusText();
@@ -94,85 +113,87 @@ export struct PostOnboardingTabs {
   }
 
   build() {
-    Column() {
-      Row() {
-        Text($r('app.string.product_name_openclaw'))
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#17181C')
-        Blank()
-        Row({space:4}) {
-          Row()
-            .width(8)
-            .height(8)
-            .borderRadius(4)
-            .backgroundColor(this.statusChipColor().dot)
-          Text(this.statusText)
-            .fontSize(12)
-            .fontColor(this.statusChipColor().text)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+    Stack({ alignContent: Alignment.Bottom }) {
+      CameraFlashOverlay({ token: this.cameraFlashToken })
+      Column() {
+        Row() {
+          Text($r('app.string.product_name_openclaw'))
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#17181C')
+          Blank()
+          Row({space:4}) {
+            Row()
+              .width(8)
+              .height(8)
+              .borderRadius(4)
+              .backgroundColor(this.statusChipColor().dot)
+            Text(this.statusText)
+              .fontSize(12)
+              .fontColor(this.statusChipColor().text)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor(this.statusChipColor().bg)
+          .borderRadius(999)
+          .border({ width: 1, color: '#E5E7EC' })
         }
-        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundColor(this.statusChipColor().bg)
-        .borderRadius(999)
+        .width('100%')
+        .padding({ left: 18, right: 18, top: 12, bottom: 12 })
+        .alignItems(VerticalAlign.Center)
+        .justifyContent(FlexAlign.SpaceBetween)
+
+        Stack() {
+          if (this.screenTabStarted) {
+            ScreenTabScreen({
+              isConnected: this.isConnected,
+              visible: this.activeTab === 2,
+            })
+          }
+          if (this.activeTab === 0) {
+            ConnectTabScreen({
+              statusText: this.statusText,
+              isConnected: this.isConnected,
+              remoteAddress: this.remoteAddress,
+            })
+          }
+          if (this.activeTab === 1) {
+            ChatSessionListScreen({
+              isConnected: this.isConnected,
+            })
+          }
+          if (this.activeTab === 2 && !this.screenTabStarted) {
+            ScreenTabScreen({
+              isConnected: this.isConnected,
+              visible: true,
+            })
+          }
+          if (this.activeTab === 3) {
+            SettingsTabScreen()
+          }
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .align(Alignment.TopStart)
+
+        Row({ space: 6 }) {
+          this.TabItem($r('app.string.tab_connect'), $r('sys.symbol.checkmark_circle_fill'), 0)
+          this.TabItem($r('app.string.tab_chat'), $r('sys.symbol.message_on_message_fill'), 1)
+          this.TabItem($r('app.string.tab_screen'), $r('sys.symbol.screen_share_fill'), 2)
+          this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape_fill'), 3)
+        }
+        .width('100%')
+        .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+        .backgroundColor('#FFFFFF')
+        .borderRadius({ topLeft: 24, topRight: 24 })
         .border({ width: 1, color: '#E5E7EC' })
+        .shadow({ radius: 12, color: '#1A000000', offsetX: 0, offsetY: -2 })
       }
-      .width('100%')
-      .padding({ left: 18, right: 18, top: 12, bottom: 12 })
-      .alignItems(VerticalAlign.Center)
-      .justifyContent(FlexAlign.SpaceBetween)
-
-      Stack() {
-        if (this.screenTabStarted) {
-          ScreenTabScreen({
-            isConnected: this.isConnected,
-            visible: this.activeTab === 2,
-          })
-        }
-        if (this.activeTab === 0) {
-          ConnectTabScreen({
-            statusText: this.statusText,
-            isConnected: this.isConnected,
-            remoteAddress: this.remoteAddress,
-          })
-        }
-        if (this.activeTab === 1) {
-          ChatSessionListScreen({
-            isConnected: this.isConnected,
-          })
-        }
-        if (this.activeTab === 2 && !this.screenTabStarted) {
-          ScreenTabScreen({
-            isConnected: this.isConnected,
-            visible: true,
-          })
-        }
-        if (this.activeTab === 3) {
-          SettingsTabScreen()
-        }
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .align(Alignment.TopStart)
-
-      Row({ space: 6 }) {
-        this.TabItem($r('app.string.tab_connect'), $r('sys.symbol.checkmark_circle_fill'), 0)
-        this.TabItem($r('app.string.tab_chat'), $r('sys.symbol.message_on_message_fill'), 1)
-        this.TabItem($r('app.string.tab_screen'), $r('sys.symbol.screen_share_fill'), 2)
-        this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape_fill'), 3)
-      }
-      .width('100%')
-      .padding({ left: 10, right: 10, top: 10, bottom: 10 })
-      .backgroundColor('#FFFFFF')
-      .borderRadius({ topLeft: 24, topRight: 24 })
-      .border({ width: 1, color: '#E5E7EC' })
-      .shadow({ radius: 12, color: '#1A000000', offsetX: 0, offsetY: -2 })
+      CameraHudOverlay({ hud: this.cameraHud })
     }
     .width('100%')
     .height('100%')
-    .alignItems(HorizontalAlign.Start)
-    .justifyContent(FlexAlign.Start)
     .backgroundColor('#F7F8FA')
   }
 }

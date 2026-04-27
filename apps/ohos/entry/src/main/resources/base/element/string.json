@@ -137,6 +137,58 @@
       "value": "The operator canvas needs WebView integration on this platform. When connected, use Chat for full control until this ships."
     },
     {
+      "name": "screen_tab_rehydrate_ready",
+      "value": "Canvas is ready to restore. Tap below to request the latest screen."
+    },
+    {
+      "name": "screen_tab_rehydrate_pending",
+      "value": "Restoring canvas from the node…"
+    },
+    {
+      "name": "screen_tab_rehydrate_retry",
+      "value": "Restore screen"
+    },
+    {
+      "name": "screen_tab_rehydrate_pending_button",
+      "value": "Restoring…"
+    },
+    {
+      "name": "screen_tab_page_loading",
+      "value": "Loading canvas…"
+    },
+    {
+      "name": "screen_tab_page_failed",
+      "value": "Canvas page failed to load."
+    },
+    {
+      "name": "screen_tab_renderer_exited",
+      "value": "Canvas renderer exited."
+    },
+    {
+      "name": "screen_tab_reload_canvas",
+      "value": "Reload canvas"
+    },
+    {
+      "name": "screen_tab_restore_detail",
+      "value": "The local scaffold is ready. Ask the node to replay the latest mobile-friendly screen into Canvas."
+    },
+    {
+      "name": "screen_tab_target_label",
+      "value": "Target"
+    },
+    {
+      "name": "screen_tab_current_label",
+      "value": "Current"
+    },
+    {
+      "name": "screen_tab_local_scaffold",
+      "value": "Local scaffold"
+    },
+    {
+      "name": "screen_tab_url_unknown",
+      "value": "Unknown"
+    },
+    {
       "name": "status_connected",
       "value": "Connected"
     },
@@ -181,6 +233,42 @@
       "value": "Password (optional)"
     },
     {
+      "name": "connect_last_gateway_error",
+      "value": "Last gateway error"
+    },
+    {
+      "name": "connect_copy_report_button",
+      "value": "Copy Report for Claw"
+    },
+    {
+      "name": "connect_copy_report_toast",
+      "value": "Copied gateway diagnostics"
+    },
+    {
+      "name": "connect_copy_report_failed",
+      "value": "Copy failed"
+    },
+    {
+      "name": "connect_pairing_hint",
+      "value": "Approve this phone on the gateway host, then connect again."
+    },
+    {
+      "name": "connect_harmonyos_version_fmt",
+      "value": "OpenClaw HarmonyOS %1$s"
+    },
+    {
+      "name": "connect_tls_trust_title",
+      "value": "Trust this gateway?"
+    },
+    {
+      "name": "connect_tls_trust_body",
+      "value": "First-time TLS connection. Verify this SHA-256 fingerprint before trusting."
+    },
+    {
+      "name": "connect_tls_trust_accept",
+      "value": "Trust and continue"
+    },
+    {
       "name": "connect_run_onboarding_again",
       "value": "Run onboarding again"
     },
@@ -203,6 +291,10 @@
     {
       "name": "common_connect",
       "value": "Connect"
+    },
+    {
+      "name": "common_save",
+      "value": "Save"
     },
     {
       "name": "connect_heading_kicker",
@@ -497,6 +589,58 @@
       "value": "FEATURES"
     },
     {
+      "name": "settings_voice_wake_title",
+      "value": "Voice wake"
+    },
+    {
+      "name": "settings_voice_wake_subtitle",
+      "value": "Listen for wake words and send the spoken command into chat."
+    },
+    {
+      "name": "settings_voice_wake_status_listening",
+      "value": "Listening"
+    },
+    {
+      "name": "settings_voice_wake_mode_off",
+      "value": "Off"
+    },
+    {
+      "name": "settings_voice_wake_mode_off_sub",
+      "value": "Disable wake words."
+    },
+    {
+      "name": "settings_voice_wake_mode_foreground",
+      "value": "Foreground"
+    },
+    {
+      "name": "settings_voice_wake_mode_foreground_sub",
+      "value": "Only while OpenClaw stays open."
+    },
+    {
+      "name": "settings_voice_wake_mode_always",
+      "value": "Always"
+    },
+    {
+      "name": "settings_voice_wake_mode_always_sub",
+      "value": "Requested across app switches."
+    },
+    {
+      "name": "settings_voice_wake_always_note",
+      "value": "HarmonyOS currently runs voice wake in the foreground only, so Always falls back to Foreground behavior."
+    },
+    {
+      "name": "settings_voice_wake_words_label",
+      "value": "Wake words"
+    },
+    {
+      "name": "settings_voice_wake_words_subtitle",
+      "value": "Comma-separated trigger words. Example: openclaw, claude"
+    },
+    {
+      "name": "settings_voice_wake_words_placeholder",
+      "value": "openclaw, claude"
+    },
+    {
       "name": "settings_voice_speaker_default",
       "value": "Voice speaker"
     },
@@ -518,7 +662,7 @@
     },
     {
       "name": "settings_voice_speaker_subtitle",
-      "value": "Speak assistant replies on the Voice tab when audio is available."
+      "value": "Speak assistant replies for chat voice sessions and wake-word commands when audio is available."
     },
     {
       "name": "settings_canvas_debug",
@@ -599,6 +743,110 @@
     {
       "name": "settings_permission_notification_listener_sub",
       "value": "Read third-party notifications for automation. Notification actions stay read-only on HarmonyOS."
+    },
+    {
+      "name": "settings_notification_forwarding_title",
+      "value": "Notification forwarding"
+    },
+    {
+      "name": "settings_notification_forwarding_sub",
+      "value": "Forward notification change events into the gateway while this app stays connected."
+    },
+    {
+      "name": "settings_notification_forwarding_disabled_hint",
+      "value": "Enable notification listener access first to forward notification events."
+    },
+    {
+      "name": "settings_notification_forwarding_filter_label",
+      "value": "Package filter"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_allowlist",
+      "value": "Allowlist"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_allowlist_sub",
+      "value": "Only listed bundle IDs are forwarded."
+    },
+    {
+      "name": "settings_notification_forwarding_mode_blocklist",
+      "value": "Blocklist"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_blocklist_sub",
+      "value": "Everything except listed bundle IDs is forwarded."
+    },
+    {
+      "name": "settings_notification_forwarding_packages_label",
+      "value": "Bundle IDs"
+    },
+    {
+      "name": "settings_notification_forwarding_packages_sub",
+      "value": "Enter comma-separated bundle IDs, or tap recent apps below."
+    },
+    {
+      "name": "settings_notification_forwarding_packages_placeholder",
+      "value": "com.example.mail, com.example.chat"
+    },
+    {
+      "name": "settings_notification_forwarding_packages_empty",
+      "value": "No bundle IDs configured yet."
+    },
+    {
+      "name": "settings_notification_forwarding_recent_label",
+      "value": "Recent notification apps"
+    },
+    {
+      "name": "settings_notification_forwarding_recent_empty",
+      "value": "Recent notification bundle IDs will appear here after notifications arrive."
+    },
+    {
+      "name": "settings_notification_forwarding_recent_add",
+      "value": "Add"
+    },
+    {
+      "name": "settings_notification_forwarding_recent_remove",
+      "value": "Remove"
+    },
+    {
+      "name": "settings_notification_forwarding_session_label",
+      "value": "Target session key"
+    },
+    {
+      "name": "settings_notification_forwarding_session_sub",
+      "value": "Leave blank to use the default route for this device."
+    },
+    {
+      "name": "settings_notification_forwarding_rate_label",
+      "value": "Max events per minute"
+    },
+    {
+      "name": "settings_notification_forwarding_rate_sub",
+      "value": "Burst limiter for notification.changed events."
+    },
+    {
+      "name": "settings_notification_forwarding_rate_invalid",
+      "value": "Enter a valid forwarding rate of at least 1 event per minute."
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_title",
+      "value": "Quiet hours"
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_sub",
+      "value": "Suppress forwarding during a local time window."
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_start",
+      "value": "Start"
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_end",
+      "value": "End"
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_invalid",
+      "value": "Use 24-hour HH:mm format for quiet hours, for example 22:00 and 07:00."
     },
     {
       "name": "settings_permission_photos",

@@ -22,6 +22,7 @@ function defaultVoiceUiState(): VoiceUiState {
   const s: VoiceUiState = {
     micEnabled: false,
     micCooldown: false,
+    isSpeaking: false,
     speakerEnabled: true,
     canCancel: false,
     liveTranscript: '',
@@ -413,13 +414,18 @@ export struct ChatTabScreen {
     return this.voicePanelExpanded ||
       this.voiceState.micEnabled ||
       this.voiceState.micCooldown ||
+      this.voiceState.isSpeaking ||
       this.voiceState.isSending ||
+      this.voiceState.canCancel ||
       this.voiceState.liveTranscript.trim().length > 0;
   }
 
   private voiceStatusChipBackground(): string {
     if (this.voiceState.micEnabled) {
       return '#E8F5E9';
+    }
+    if (this.voiceState.isSpeaking) {
+      return '#FFF4E5';
     }
     if (this.voiceState.isSending) {
       return '#ECF3FF';
@@ -434,6 +440,9 @@ export struct ChatTabScreen {
     if (this.voiceState.micEnabled) {
       return 'rgba(47, 140, 90, 0.28)';
     }
+    if (this.voiceState.isSpeaking) {
+      return 'rgba(200, 132, 26, 0.24)';
+    }
     if (this.voiceState.isSending) {
       return 'rgba(29, 93, 216, 0.24)';
     }
@@ -446,6 +455,9 @@ export struct ChatTabScreen {
   private voiceStatusChipTextColor(): string {
     if (this.voiceState.micEnabled) {
       return '#2F8C5A';
+    }
+    if (this.voiceState.isSpeaking) {
+      return '#C8841A';
     }
     if (this.voiceState.isSending) {
       return '#1D5DD8';
@@ -460,6 +472,12 @@ export struct ChatTabScreen {
     if (this.voiceState.micCooldown) {
       return '#D6DAE2';
     }
+    if (this.voiceState.isSpeaking) {
+      return '#FFF4E5';
+    }
+    if (this.voiceState.canCancel && !this.voiceState.micEnabled) {
+      return '#FFF1F3';
+    }
     return this.voiceState.micEnabled ? '#dc3545' : '#FFFFFF';
   }
 
@@ -467,8 +485,14 @@ export struct ChatTabScreen {
     if (this.voiceState.micEnabled) {
       return '#C53143';
     }
+    if (this.voiceState.isSpeaking) {
+      return '#F1D9A8';
+    }
     if (this.voiceState.micCooldown) {
       return '#D6DAE2';
+    }
+    if (this.voiceState.canCancel) {
+      return '#F3C7CE';
     }
     return '#D6DAE2';
   }
@@ -477,8 +501,14 @@ export struct ChatTabScreen {
     if (this.voiceState.micEnabled) {
       return '#FFFFFF';
     }
+    if (this.voiceState.isSpeaking) {
+      return '#C8841A';
+    }
     if (this.voiceState.micCooldown) {
       return '#99A0AE';
+    }
+    if (this.voiceState.canCancel) {
+      return '#dc3545';
     }
     return '#1D5DD8';
   }
@@ -492,6 +522,9 @@ export struct ChatTabScreen {
     }
     if (this.voiceState.micEnabled) {
       return this.resStr($r('app.string.voice_hint_mic_stop_send'));
+    }
+    if (this.voiceState.isSpeaking) {
+      return 'Assistant is speaking. Tap the mic to interrupt.';
     }
     if (this.voiceState.micCooldown) {
       return 'Finishing capture…';
@@ -530,6 +563,18 @@ export struct ChatTabScreen {
     this.nodeRuntime.setVoiceScreenActive(true);
     if (this.voiceState.micEnabled) {
       await this.nodeRuntime.setVoiceMicEnabled(false);
+      return;
+    }
+    if (this.voiceState.isSpeaking) {
+      if (this.hasMicPermission) {
+        await this.nodeRuntime.setVoiceMicEnabled(true);
+      } else {
+        await this.requestMicAndEnable();
+      }
+      return;
+    }
+    if (this.voiceState.canCancel) {
+      await this.cancelVoiceSend();
       return;
     }
     if (this.hasMicPermission) {
@@ -613,7 +658,8 @@ export struct ChatTabScreen {
     Column({ space: 10 }) {
       Row({ space: 8 }) {
         Row({ space: 6 }) {
-          SymbolGlyph(this.voiceState.micEnabled ? $r('sys.symbol.mic_fill') : $r('sys.symbol.mic_slash_fill'))
+          SymbolGlyph(this.voiceState.micEnabled ? $r('sys.symbol.mic_fill') :
+            (this.voiceState.isSpeaking ? $r('sys.symbol.speaker_fill') : $r('sys.symbol.mic_slash_fill')))
             .fontSize(15)
             .fontColor([this.voiceStatusChipTextColor()])
           Text(this.voiceState.activityLabel)
@@ -1658,7 +1704,8 @@ export struct ChatTabScreen {
 
               Row({ space: 6 }) {
                 Button() {
-                  SymbolGlyph(this.voiceState.micEnabled ? $r('sys.symbol.mic_slash_fill') : $r('sys.symbol.mic_fill'))
+                  SymbolGlyph(this.voiceState.micEnabled || this.voiceState.canCancel ? $r('sys.symbol.mic_slash_fill') :
+                    $r('sys.symbol.mic_fill'))
                     .fontSize(20)
                     .fontColor([this.voiceMicButtonIconColor()])
                 }

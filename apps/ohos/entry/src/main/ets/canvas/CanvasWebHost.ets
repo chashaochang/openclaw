@@ -64,6 +64,10 @@ export class CanvasWebHost {
     this.currentDocumentUrl = (url ?? '').trim();
   }
 
+  clearCurrentUrl(): void {
+    this.currentDocumentUrl = '';
+  }
+
   getCurrentUrl(): string | null {
     const u = this.currentDocumentUrl.trim();
     return u.length > 0 ? u : null;
@@ -71,6 +75,7 @@ export class CanvasWebHost {
 
   navigate(url: string): void {
     const t = url.trim();
+    this.currentDocumentUrl = '';
     if (t.length === 0 || t === '/') {
       this.targetUrl = null;
     } else {
@@ -87,6 +92,14 @@ export class CanvasWebHost {
     return this.targetUrl === null;
   }
 
+  getDisplayUrl(): string {
+    const u = this.targetUrl;
+    if (u !== null && u.length > 0) {
+      return u;
+    }
+    return CANVAS_SCAFFOLD_RESOURCE_URL;
+  }
+
   setHomeStateJson(json: string | null): void {
     this.homeStateJson = json;
     void this.applyInjections();
@@ -99,7 +112,7 @@ export class CanvasWebHost {
     void this.applyInjections();
   }
 
-  private reload(): void {
+  reloadCurrent(): void {
     const c = this.controller;
     if (!c) {
       return;
@@ -114,6 +127,10 @@ export class CanvasWebHost {
     } catch {
       // loadUrl can throw if controller is tearing down.
     }
+  }
+
+  private reload(): void {
+    this.reloadCurrent();
   }
 
   notifyPageEnd(): void {

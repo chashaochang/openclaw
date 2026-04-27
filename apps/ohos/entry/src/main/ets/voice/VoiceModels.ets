@@ -17,6 +17,7 @@ export interface VoiceConversationEntry {
 export interface VoiceUiState {
   micEnabled: boolean;
   micCooldown: boolean;
+  isSpeaking: boolean;
   speakerEnabled: boolean;
   canCancel: boolean;
   liveTranscript: string;

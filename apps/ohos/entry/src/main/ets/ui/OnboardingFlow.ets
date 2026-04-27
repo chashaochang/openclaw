@@ -16,8 +16,10 @@ import {
 } from '../common/GatewaySetupCode';
 import type { GatewayEndpointConfig } from '../common/GatewaySetupCode';
 import { NodeRuntime } from '../NodeRuntime';
+import type { GatewayTrustPrompt } from '../NodeRuntime';
 import { MotionHandler } from '../node/MotionHandler';
 import { LocationMode } from '../LocationMode';
+import { normalizeFingerprintForDisplay } from '../gateway/GatewayTls';
 
 type OnboardingStep = 'welcome' | 'gateway' | 'permissions' | 'finalCheck';
 type GatewayInputMode = 'setupCode' | 'manual';
@@ -68,6 +70,7 @@ export struct OnboardingFlow {
   @State gatewayUrl: string = '';
   @State gatewayEndpoint: GatewayEndpointConfig | null = null;
   @State attemptedConnect: boolean = false;
+  @State pendingTrust: GatewayTrustPrompt | null = null;
   @State statusText: string = 'Offline';
   @State isConnected: boolean = false;
   @State remoteAddress: string = '';
@@ -98,6 +101,10 @@ export struct OnboardingFlow {
   private readonly motionRowAvailable: boolean = MotionHandler.isAvailable();
 
   aboutToAppear(): void {
+    this.pendingTrust = this.nodeRuntime.getPendingGatewayTrustPrompt();
+    this.nodeRuntime.setGatewayTrustListener((prompt) => {
+      this.pendingTrust = prompt;
+    });
     this.nodeRuntime.setStatusListener((s) => {
       // Defer to next tick to avoid stack overflow when notifyStatus is called
       // synchronously during connect (e.g. from WebSocket callbacks).
@@ -112,6 +119,10 @@ export struct OnboardingFlow {
     this.remoteAddress = this.nodeRuntime.getRemoteAddress();
     void this.loadSavedFeatureSelections();
     void this.refreshPermissionStates();
+  }
+
+  aboutToDisappear(): void {
+    this.nodeRuntime.setGatewayTrustListener(null);
   }
 
   onPageShow(): void {
@@ -816,8 +827,9 @@ export struct OnboardingFlow {
   }
 
   build() {
-    Column() {
-      Column({ space: 8 }) {
+    Stack({ alignContent: Alignment.Center }) {
+      Column() {
+        Column({ space: 8 }) {
         Text($r('app.string.onboarding_first_run_kicker'))
           .fontSize(11)
           .fontWeight(FontWeight.Bold)
@@ -855,54 +867,110 @@ export struct OnboardingFlow {
       .scrollBar(BarState.Off)
       .align(Alignment.TopStart)
 
-      Row({ space: 10 }) {
-        Button($r('app.string.common_back'))
-          .width(64)
-          .height(52)
-          .enabled(this.step !== 'welcome')
-          .backgroundColor('#F6F7FA')
-          .fontColor(this.step !== 'welcome' ? '#4D5563' : '#8A92A2')
-          .onClick(() => this.goBack())
-
-        if (this.step === 'welcome' || this.step === 'gateway' || this.step === 'permissions') {
-          Button($r('app.string.common_next'))
-            .layoutWeight(1)
+        Row({ space: 10 }) {
+          Button($r('app.string.common_back'))
+            .width(64)
             .height(52)
-            .fontSize(16)
-            .fontWeight(FontWeight.Bold)
-            .backgroundColor('#1D5DD8')
-            .onClick(() => {
-              void this.goNext();
-            })
-        } else if (this.step === 'finalCheck') {
-          if (this.isConnected) {
-            Button($r('app.string.common_finish'))
+            .enabled(this.step !== 'welcome')
+            .backgroundColor('#F6F7FA')
+            .fontColor(this.step !== 'welcome' ? '#4D5563' : '#8A92A2')
+            .onClick(() => this.goBack())
+
+          if (this.step === 'welcome' || this.step === 'gateway' || this.step === 'permissions') {
+            Button($r('app.string.common_next'))
               .layoutWeight(1)
               .height(52)
               .fontSize(16)
               .fontWeight(FontWeight.Bold)
               .backgroundColor('#1D5DD8')
-              .onClick(() => this.doFinish())
-          } else {
-            Button($r('app.string.common_connect'))
-              .layoutWeight(1)
-              .height(52)
-              .fontSize(16)
-              .fontWeight(FontWeight.Bold)
-              .backgroundColor('#1D5DD8')
-              .onClick(() => this.doConnect())
+              .onClick(() => {
+                void this.goNext();
+              })
+          } else if (this.step === 'finalCheck') {
+            if (this.isConnected) {
+              Button($r('app.string.common_finish'))
+                .layoutWeight(1)
+                .height(52)
+                .fontSize(16)
+                .fontWeight(FontWeight.Bold)
+                .backgroundColor('#1D5DD8')
+                .onClick(() => this.doFinish())
+            } else {
+              Button($r('app.string.common_connect'))
+                .layoutWeight(1)
+                .height(52)
+                .fontSize(16)
+                .fontWeight(FontWeight.Bold)
+                .backgroundColor('#1D5DD8')
+                .onClick(() => this.doConnect())
+            }
           }
         }
+        .width('100%')
+        .padding({ top: 12, bottom: 8 })
       }
       .width('100%')
-      .padding({ top: 12, bottom: 8 })
+      .height('100%')
+      .padding(20)
+      .backgroundColor('#F7F8FA')
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Start)
+
+      if (this.pendingTrust !== null) {
+        Column() {
+          Column({ space: 14 }) {
+            Text($r('app.string.connect_tls_trust_title'))
+              .fontSize(18)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#17181C')
+            Text($r('app.string.connect_tls_trust_body'))
+              .fontSize(14)
+              .fontColor('#4D5563')
+            Text(normalizeFingerprintForDisplay(this.pendingTrust?.fingerprintSha256 ?? ''))
+              .fontSize(13)
+              .fontFamily('monospace')
+              .fontColor('#17181C')
+              .padding(12)
+              .width('100%')
+              .backgroundColor('#F6F7FA')
+              .borderRadius(12)
+              .border({ width: 1, color: '#E5E7EC' })
+            Row({ space: 10 }) {
+              Button($r('app.string.common_cancel'))
+                .layoutWeight(1)
+                .height(44)
+                .backgroundColor('#F6F7FA')
+                .fontColor('#4D5563')
+                .onClick(() => {
+                  this.nodeRuntime.declineGatewayTrustPrompt();
+                })
+              Button($r('app.string.connect_tls_trust_accept'))
+                .layoutWeight(1)
+                .height(44)
+                .backgroundColor('#1D5DD8')
+                .fontColor('#FFFFFF')
+                .onClick(() => {
+                  void this.nodeRuntime.acceptGatewayTrustPrompt();
+                })
+            }
+            .width('100%')
+          }
+          .width('88%')
+          .padding(20)
+          .backgroundColor('#FFFFFF')
+          .borderRadius(20)
+          .border({ width: 1, color: '#E5E7EC' })
+          .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('rgba(23, 24, 28, 0.45)')
+        .justifyContent(FlexAlign.Center)
+        .padding({ left: 20, right: 20 })
+      }
     }
     .width('100%')
     .height('100%')
-    .padding(20)
-    .backgroundColor('#F7F8FA')
-    .alignItems(HorizontalAlign.Start)
-    .justifyContent(FlexAlign.Start)
   }
 
   @Builder
