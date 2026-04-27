@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createPluginActivationSource,
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
@@ -54,15 +55,27 @@ describe("normalizePluginsConfig", () => {
   });
 
   it.each([
+    [{}, undefined],
+    [{ slots: { contextEngine: "lossless-claw" } }, "lossless-claw"],
+    [{ slots: { contextEngine: "none" } }, null],
+    [{ slots: { contextEngine: "  cortex  " } }, "cortex"],
+    [{ slots: { contextEngine: "" } }, undefined],
+  ] as const)("preserves contextEngine slot for %o (#64170)", (config, expected) => {
+    expect(normalizePluginsConfig(config).slots.contextEngine).toBe(expected);
+  });
+
+  it.each([
     {
       name: "normalizes plugin hook policy flags",
       entry: {
         hooks: {
           allowPromptInjection: false,
+          allowConversationAccess: true,
         },
       },
       expectedHooks: {
         allowPromptInjection: false,
+        allowConversationAccess: true,
       },
     },
     {
@@ -70,7 +83,8 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: "nope",
-        } as unknown as { allowPromptInjection: boolean },
+          allowConversationAccess: "nope",
+        } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
       },
       expectedHooks: undefined,
     },
@@ -83,12 +97,12 @@ describe("normalizePluginsConfig", () => {
       name: "normalizes plugin subagent override policy settings",
       subagent: {
         allowModelOverride: true,
-        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
+        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.5"],
       },
       expected: {
         allowModelOverride: true,
         hasAllowedModelsConfig: true,
-        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
       },
     },
     {
@@ -177,10 +191,7 @@ describe("resolveEffectiveEnableState", () => {
 
   it.each([
     [{ enabled: true }, { enabled: true }],
-    [
-      { enabled: true, allow: ["browser"] as string[] },
-      { enabled: false, reason: "not in allowlist" },
-    ],
+    [{ enabled: true, allow: ["browser"] as string[] }, { enabled: true }],
     [
       {
         enabled: true,
@@ -209,7 +220,7 @@ describe("resolveEffectiveEnableState", () => {
 describe("resolveEffectivePluginActivationState", () => {
   it("distinguishes explicit enablement from auto activation", () => {
     const rawConfig: NonNullable<
-      Parameters<typeof resolveEffectivePluginActivationState>[0]["sourceRootConfig"]
+      Parameters<typeof resolveEffectivePluginActivationState>[0]["rootConfig"]
     > = {
       channels: {
         telegram: {
@@ -234,8 +245,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(effectiveConfig.plugins),
         rootConfig: effectiveConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
         autoEnabledReason: "telegram configured",
       }),
     ).toEqual({
@@ -265,8 +275,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(rawConfig.plugins),
         rootConfig: rawConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
       }),
     ).toEqual({
       enabled: false,
@@ -312,8 +321,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(rawConfig.plugins),
         rootConfig: rawConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
       }),
     ).toEqual({
       enabled: false,
@@ -324,7 +332,7 @@ describe("resolveEffectivePluginActivationState", () => {
     });
   });
 
-  it("keeps allowlists authoritative over bundled channel activation", () => {
+  it("lets explicit bundled channel activation bypass the allowlist", () => {
     const rawConfig = {
       channels: {
         telegram: {
@@ -342,15 +350,43 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(rawConfig.plugins),
         rootConfig: rawConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "channel enabled in config",
+    });
+  });
+
+  it("keeps denylist authoritative over explicit bundled channel activation", () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        deny: ["telegram"],
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
       }),
     ).toEqual({
       enabled: false,
       activated: false,
       explicitlyEnabled: true,
       source: "disabled",
-      reason: "not in allowlist",
+      reason: "blocked by denylist",
     });
   });
 
@@ -367,8 +403,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(rawConfig.plugins),
         rootConfig: rawConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
         autoEnabledReason: "telegram configured",
       }),
     ).toEqual({
@@ -400,8 +435,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(effectiveConfig.plugins),
         rootConfig: effectiveConfig,
-        sourceConfig: normalizePluginsConfig(sourceConfig.plugins),
-        sourceRootConfig: sourceConfig,
+        activationSource: createPluginActivationSource({ config: sourceConfig }),
       }),
     ).toEqual({
       enabled: true,
@@ -409,6 +443,32 @@ describe("resolveEffectivePluginActivationState", () => {
       explicitlyEnabled: false,
       source: "auto",
       reason: "enabled by effective config",
+    });
+  });
+
+  it("treats an explicitly selected workspace context engine as explicit activation", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          contextEngine: "lossless-claw",
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "lossless-claw",
+        origin: "workspace",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected context engine slot",
     });
   });
 });
@@ -501,6 +561,20 @@ describe("resolveEnableState", () => {
       expected: {
         enabled: false,
         reason: "workspace plugin (disabled by default)",
+      },
+    });
+  });
+
+  it("keeps an explicitly selected workspace context engine enabled when omitted from plugins.allow", () => {
+    expectNormalizedEnableState({
+      id: "lossless-claw",
+      origin: "workspace",
+      config: {
+        allow: ["telegram"],
+        slots: { contextEngine: "lossless-claw" },
+      },
+      expected: {
+        enabled: true,
       },
     });
   });

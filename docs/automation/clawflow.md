@@ -1,8 +1,12 @@
 ---
-summary: "Redirect to TaskFlow"
+summary: "Redirect to Task Flow"
 title: "ClawFlow"
 ---
 
-# ClawFlow
+ClawFlow was renamed to [Task flow](/automation/taskflow).
 
-ClawFlow was renamed to [TaskFlow](/automation/taskflow). See [TaskFlow](/automation/taskflow) for the current documentation.
+## Related
+
+- [Task flow](/automation/taskflow)
+- [Standing orders](/automation/standing-orders)
+- [Hooks](/automation/hooks)

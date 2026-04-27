@@ -1,10 +1,10 @@
-import { listPotentialConfiguredChannelIds } from "../../../channels/config-presence.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { listExplicitConfiguredChannelIdsForConfig } from "../../../plugins/channel-plugin-ids.js";
 import {
   normalizePluginsConfig,
-  resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
 } from "../../../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 
 export type ChannelPluginBlockerHit = {
@@ -13,21 +13,42 @@ export type ChannelPluginBlockerHit = {
   reason: "disabled in config" | "plugins disabled";
 };
 
+function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
+  if (cfg.plugins?.enabled === false) {
+    return true;
+  }
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return false;
+  }
+  return Object.values(entries).some((entry) => {
+    return (
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      "enabled" in entry &&
+      (entry as { enabled?: unknown }).enabled === false
+    );
+  });
+}
+
 export function scanConfiguredChannelPluginBlockers(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelPluginBlockerHit[] {
-  const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(cfg, env).map((id) => id.trim()),
-  );
+  if (!hasExplicitChannelPluginBlockerConfig(cfg)) {
+    return [];
+  }
+  const configuredChannelIds = new Set(listExplicitConfiguredChannelIdsForConfig(cfg));
   if (configuredChannelIds.size === 0) {
     return [];
   }
 
   const pluginsConfig = normalizePluginsConfig(cfg.plugins);
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     env,
+    includeDisabled: true,
   });
   const hits: ChannelPluginBlockerHit[] = [];
 
@@ -36,7 +57,7 @@ export function scanConfiguredChannelPluginBlockers(
       continue;
     }
 
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: plugin.id,
       origin: plugin.origin,
       config: pluginsConfig,
@@ -44,9 +65,10 @@ export function scanConfiguredChannelPluginBlockers(
       enabledByDefault: plugin.enabledByDefault,
     });
     if (
-      enableState.enabled ||
-      !enableState.reason ||
-      (enableState.reason !== "disabled in config" && enableState.reason !== "plugins disabled")
+      activationState.activated ||
+      !activationState.reason ||
+      (activationState.reason !== "disabled in config" &&
+        activationState.reason !== "plugins disabled")
     ) {
       continue;
     }
@@ -58,7 +80,7 @@ export function scanConfiguredChannelPluginBlockers(
       hits.push({
         channelId,
         pluginId: plugin.id,
-        reason: enableState.reason,
+        reason: activationState.reason,
       });
     }
   }

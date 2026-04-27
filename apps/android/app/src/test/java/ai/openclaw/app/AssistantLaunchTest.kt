@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import android.content.Intent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,6 +19,7 @@ class AssistantLaunchTest {
     requireNotNull(parsed)
     assertEquals("assist", parsed.source)
     assertNull(parsed.prompt)
+    assertFalse(parsed.autoSend)
   }
 
   @Test
@@ -30,6 +32,7 @@ class AssistantLaunchTest {
     requireNotNull(parsed)
     assertEquals("app_action", parsed.source)
     assertEquals("summarize my unread texts", parsed.prompt)
+    assertFalse(parsed.autoSend)
   }
 
   @Test
