@@ -88,6 +88,20 @@ interface HomeCanvasPayloadShape {
   footer: string;
 }
 
+interface HomeCanvasAgentCardShape {
+  id: string;
+  name: string;
+  badge: string;
+  caption: string;
+  isActive: boolean;
+}
+
+interface GatewayAgentSummaryShape {
+  id: string;
+  name: string | null;
+  emoji: string | null;
+}
+
 interface NodePermissionsShape {
   camera: boolean;
   location: boolean;
@@ -111,6 +125,11 @@ interface NotificationChangedPayloadShape {
   subText?: string;
   category?: string;
   channelId?: string;
+}
+
+export interface NotificationForwardingCandidateApp {
+  packageName: string;
+  label: string;
 }
 
 interface CanvasRehydrateRequestPayloadShape {
@@ -186,6 +205,14 @@ export class NodeRuntime {
   private _statusText = "Offline";
   private _isConnected = false;
   private _remoteAddress = "";
+  private gatewayServerName: string | null = null;
+  private gatewayMainSessionKey: string | null = null;
+  private gatewayDefaultAgentId: string | null = null;
+  private gatewayAgents: GatewayAgentSummaryShape[] = [];
+  private operatorConnected = false;
+  private nodeConnected = false;
+  private operatorStatusText = "Offline";
+  private nodeStatusText = "Offline";
   private _onboardingCompleted = false;
   private _cameraEnabled = true;
   private _locationMode: LocationMode = LocationMode.Off;
@@ -378,6 +405,9 @@ export class NodeRuntime {
         const s = this.nodeSession;
         return s ? s.refreshNodeCanvasCapability() : Promise.resolve(false);
       },
+      onNavigate: () => {
+        this.handleCanvasNavigationQueued();
+      },
       onA2uiPush: () => {
         this.canvasA2uiHydrated = true;
         this.canvasRehydratePending = false;
@@ -386,13 +416,18 @@ export class NodeRuntime {
       },
       onA2uiReset: () => {
         this.canvasA2uiHydrated = false;
+        this.canvasRehydratePending = false;
+        this.canvasRehydrateErrorText = null;
+        if (this.canvasWebHost.isDefaultScaffold()) {
+          this.didAutoRequestCanvasRehydrate = false;
+        }
         this.notifyCanvasUi();
       },
     });
   }
 
   private resolveMainSessionKey(): string {
-    const k = (this.operatorSession?.getMainSessionKey() ?? "").trim();
+    const k = (this.gatewayMainSessionKey ?? this.operatorSession?.getMainSessionKey() ?? "").trim();
     return k.length > 0 ? k : "main";
   }
 
@@ -406,33 +441,234 @@ export class NodeRuntime {
     return `${raw.replace(/\/+$/, "")}/__openclaw__/a2ui/?platform=harmony`;
   }
 
-  private buildHomeCanvasPayloadJson(): string {
-    let gatewayState: string;
+  private normalizedSummaryText(value: string | null | undefined): string | null {
+    const trimmed = (value ?? "").trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private normalizeMainSessionKey(value: string | null | undefined): string {
+    const trimmed = (value ?? "").trim();
+    return trimmed.length > 0 ? trimmed : "main";
+  }
+
+  private resolveAgentIdFromMainSessionKey(value: string | null | undefined): string | null {
+    const trimmed = (value ?? "").trim();
+    if (!trimmed.startsWith("agent:")) {
+      return null;
+    }
+    const agentId = trimmed.substring("agent:".length).split(":")[0].trim();
+    return agentId.length > 0 ? agentId : null;
+  }
+
+  private resolveHomeCanvasGatewayState(): string {
     if (this._isConnected) {
-      gatewayState = "connected";
-    } else {
-      const s = this._statusText.toLowerCase();
-      if (s.includes("connecting") || s.includes("reconnecting")) {
-        gatewayState = "connecting";
-      } else if (s.includes("error") || s.includes("failed")) {
-        gatewayState = "error";
-      } else {
-        gatewayState = "offline";
+      return "connected";
+    }
+    const status = this._statusText.toLowerCase();
+    if (status.includes("connecting") || status.includes("reconnecting")) {
+      return "connecting";
+    }
+    if (status.includes("error") || status.includes("failed")) {
+      return "error";
+    }
+    return "offline";
+  }
+
+  private resolveActiveAgentId(): string {
+    const mainKey = this.resolveMainSessionKey();
+    if (mainKey.startsWith("agent:")) {
+      const agentId = mainKey.substring("agent:".length).split(":")[0].trim();
+      if (agentId.length > 0) {
+        return agentId;
       }
     }
-    const agents: object[] = [];
+    return (this.gatewayDefaultAgentId ?? "").trim();
+  }
+
+  private resolveActiveAgentName(activeAgentId: string): string {
+    if (activeAgentId.length > 0) {
+      for (let i = 0; i < this.gatewayAgents.length; i++) {
+        const agent = this.gatewayAgents[i];
+        if (agent.id === activeAgentId) {
+          return this.normalizedSummaryText(agent.name) ?? agent.id;
+        }
+      }
+      return activeAgentId;
+    }
+    return this.gatewayAgents.length > 0
+      ? this.normalizedSummaryText(this.gatewayAgents[0].name) ?? this.gatewayAgents[0].id
+      : "Main";
+  }
+
+  private buildHomeCanvasBadge(agent: GatewayAgentSummaryShape): string {
+    const emoji = this.normalizedSummaryText(agent.emoji);
+    if (emoji !== null) {
+      return emoji;
+    }
+    const source = this.normalizedSummaryText(agent.name) ?? agent.id;
+    const tokens = source.split(/[\s\-_]+/).filter((token) => token.trim().length > 0).slice(0, 2);
+    let initials = "";
+    for (let i = 0; i < tokens.length; i++) {
+      const ch = tokens[i].trim().charAt(0);
+      if (ch.length > 0) {
+        initials += ch.toUpperCase();
+      }
+    }
+    return initials.length > 0 ? initials : "OC";
+  }
+
+  private buildHomeCanvasAgents(activeAgentId: string): HomeCanvasAgentCardShape[] {
+    const defaultAgentId = (this.gatewayDefaultAgentId ?? "").trim();
+    const cards: HomeCanvasAgentCardShape[] = [];
+    for (let i = 0; i < this.gatewayAgents.length; i++) {
+      const agent = this.gatewayAgents[i];
+      const isActive = activeAgentId.length > 0 && agent.id === activeAgentId;
+      const isDefault = defaultAgentId.length > 0 && agent.id === defaultAgentId;
+      cards.push({
+        id: agent.id,
+        name: this.normalizedSummaryText(agent.name) ?? agent.id,
+        badge: this.buildHomeCanvasBadge(agent),
+        caption: isActive ? "Active on this phone" : (isDefault ? "Default agent" : "Ready"),
+        isActive: isActive,
+      });
+    }
+    cards.sort((a, b) => {
+      if (a.isActive !== b.isActive) {
+        return a.isActive ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    return cards;
+  }
+
+  private clearHomeCanvasOverview(): void {
+    this.gatewayServerName = null;
+    this.gatewayMainSessionKey = null;
+    this.gatewayDefaultAgentId = null;
+    this.gatewayAgents = [];
+  }
+
+  private showLocalCanvasOnConnect(): void {
+    this.canvasA2uiHydrated = false;
+    this.canvasRehydratePending = false;
+    this.canvasRehydrateErrorText = null;
+    this.canvasWebHost.navigate("");
+    this.handleCanvasNavigationQueued();
+  }
+
+  private showLocalCanvasOnDisconnect(): void {
+    this.canvasA2uiHydrated = false;
+    this.canvasRehydratePending = false;
+    this.canvasRehydrateErrorText = null;
+    this.canvasWebHost.navigate("");
+    this.handleCanvasNavigationQueued();
+  }
+
+  private handleCanvasNavigationQueued(): void {
+    if (!this.canvasWebHost.isDefaultScaffold()) {
+      this.canvasRehydratePending = false;
+      this.canvasRehydrateErrorText = null;
+    }
+    this.canvasA2uiHydrated = false;
+    this.canvasPageLoading = true;
+    this.canvasPageErrorText = null;
+    this.canvasPageErrorDetail = null;
+    this.notifyCanvasUi();
+  }
+
+  private async refreshAgentsFromGateway(): Promise<void> {
+    const session = this.operatorSession;
+    if (!session || !this.operatorConnected) {
+      return;
+    }
+    try {
+      const res = await session.request("agents.list", {}, 10000);
+      if (!res.ok || !res.payloadJson) {
+        return;
+      }
+      const root = JSON.parse(res.payloadJson) as Record<string, object | string | number | boolean | null>;
+      const defaultAgentId = String(root["defaultId"] ?? "").trim();
+      const mainKeyValue = root["mainKey"];
+      const mainKey = typeof mainKeyValue === "string" ? this.normalizeMainSessionKey(mainKeyValue) : "main";
+      const agentsRaw = root["agents"];
+      const nextAgents: GatewayAgentSummaryShape[] = [];
+      if (Array.isArray(agentsRaw)) {
+        const agentItems = agentsRaw as object[];
+        for (let i = 0; i < agentItems.length; i++) {
+          const item: object = agentItems[i];
+          if (!item || typeof item !== "object") {
+            continue;
+          }
+          const obj = item as Record<string, object | string | number | boolean | null>;
+          const idValue = obj["id"];
+          const id = typeof idValue === "string" ? idValue.trim() : "";
+          if (id.length === 0) {
+            continue;
+          }
+          const nameValue = obj["name"];
+          const name = typeof nameValue === "string" ? this.normalizedSummaryText(nameValue) : null;
+          const identityRaw = obj["identity"];
+          let emoji: string | null = null;
+          if (identityRaw && typeof identityRaw === "object") {
+            const identity = identityRaw as Record<string, object | string | number | boolean | null>;
+            const emojiValue = identity["emoji"];
+            emoji = typeof emojiValue === "string" ? this.normalizedSummaryText(emojiValue) : null;
+          }
+          nextAgents.push({
+            id: id,
+            name: name,
+            emoji: emoji,
+          });
+        }
+      }
+      this.gatewayMainSessionKey = mainKey;
+      this.gatewayDefaultAgentId = defaultAgentId.length > 0 ? defaultAgentId : null;
+      this.gatewayAgents = nextAgents;
+      this.chatController?.applyMainSessionKey(mainKey);
+      this.updateHomeCanvasState();
+    } catch {
+      // best-effort
+    }
+  }
+
+  private buildHomeCanvasPayloadJson(): string {
+    const gatewayState = this.resolveHomeCanvasGatewayState();
+    const gatewayName = this.normalizedSummaryText(this.gatewayServerName);
+    const gatewayAddress = this.normalizedSummaryText(this._remoteAddress);
+    const gatewayLabel = gatewayName ?? gatewayAddress ?? "Gateway";
+    const activeAgentId = this.resolveActiveAgentId();
+    const agents = this.buildHomeCanvasAgents(activeAgentId);
     const payload: HomeCanvasPayloadShape = {
-      gatewayState,
-      eyebrow: "OpenClaw",
-      title: "Your phone stays quiet until it is needed",
-      subtitle: "",
-      gatewayLabel: "Gateway",
-      activeAgentName: "Main",
-      activeAgentBadge: "OC",
-      activeAgentCaption: this._isConnected ? "Connected" : this._statusText,
-      agentCount: 0,
-      agents,
-      footer: "",
+      gatewayState: gatewayState,
+      eyebrow: gatewayState === "connected" ? `Connected to ${gatewayLabel}` :
+        gatewayState === "connecting" ? "Reconnecting" : "Welcome to OpenClaw",
+      title: gatewayState === "connected" ? "Your agents are ready" :
+        gatewayState === "connecting" ? "OpenClaw is syncing back up" :
+        "Your phone stays quiet until it is needed",
+      subtitle: gatewayState === "connected"
+        ? "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep."
+        : gatewayState === "connecting"
+          ? "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment."
+          : "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
+      gatewayLabel: gatewayLabel,
+      activeAgentName: gatewayState === "offline" || gatewayState === "error"
+        ? "Main"
+        : this.resolveActiveAgentName(activeAgentId),
+      activeAgentBadge: gatewayState === "connected"
+        ? (agents.find((agent) => agent.isActive)?.badge ?? "OC")
+        : "OC",
+      activeAgentCaption: gatewayState === "connected"
+        ? "Selected on this phone"
+        : gatewayState === "connecting"
+          ? "Gateway session in progress"
+          : "Connect to load your agents",
+      agentCount: agents.length,
+      agents: gatewayState === "connected" ? agents.slice(0, 6) : agents.slice(0, 4),
+      footer: gatewayState === "connected"
+        ? "The overview refreshes on reconnect and when this screen opens."
+        : gatewayState === "connecting"
+          ? "If the gateway is reachable, reconnect should complete without intervention."
+          : "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
     };
     return JSON.stringify(payload);
   }
@@ -633,9 +869,14 @@ export class NodeRuntime {
   }
 
   async refreshHomeCanvasOverviewIfConnected(): Promise<void> {
-    if (!this._isConnected) {
+    if (!this.operatorConnected) {
+      this.updateHomeCanvasState();
       return;
     }
+    await Promise.all([
+      this.refreshAgentsFromGateway(),
+      this.refreshGatewayMainSessionFromOperator(),
+    ]);
     this.updateHomeCanvasState();
   }
 
@@ -672,6 +913,15 @@ export class NodeRuntime {
     this.gatewayTrustListener?.(this.pendingGatewayTrust);
   }
 
+  syncCanvasCurrentUrlFromController(): void {
+    const previousUrl = this.canvasWebHost.getCurrentUrl() ?? '';
+    const nextUrl = this.canvasWebHost.refreshCurrentUrlFromController() ?? '';
+    if (previousUrl === nextUrl) {
+      return;
+    }
+    this.notifyCanvasUi();
+  }
+
   setCanvasUiListener(listener: ((state: CanvasUiState) => void) | null): void {
     this.canvasUiListener = listener;
     if (listener) {
@@ -691,7 +941,7 @@ export class NodeRuntime {
   }
 
   async requestCanvasRehydrate(source: string = "manual", force: boolean = true): Promise<void> {
-    if (!this.nodeSession || !this._isConnected) {
+    if (!this.nodeSession || !this.nodeConnected) {
       this.canvasRehydratePending = false;
       this.canvasRehydrateErrorText = "Node offline. Reconnect and retry.";
       this.notifyCanvasUi();
@@ -747,6 +997,24 @@ export class NodeRuntime {
     return trimmed.length > 0 ? trimmed : null;
   }
 
+  private async refreshGatewayMainSessionFromOperator(): Promise<void> {
+    const session = this.operatorSession;
+    if (!session || !this.operatorConnected) {
+      return;
+    }
+    try {
+      const nextMainKey = this.normalizeMainSessionKey(session.getMainSessionKey());
+      if (nextMainKey === this.gatewayMainSessionKey) {
+        return;
+      }
+      this.gatewayMainSessionKey = nextMainKey;
+      this.chatController?.applyMainSessionKey(nextMainKey);
+      this.notifyCanvasUi();
+    } catch {
+      // best-effort
+    }
+  }
+
   private logCanvasInfo(message: string, ...args: string[]): void {
     if (!this.canvasDebugEnabled) {
       return;
@@ -763,7 +1031,11 @@ export class NodeRuntime {
     if (normalizedUrl !== null) {
       this.canvasWebHost.setCurrentUrl(normalizedUrl);
     } else {
-      this.canvasWebHost.clearCurrentUrl();
+      this.canvasWebHost.refreshCurrentUrlFromController();
+    }
+    if (!this.canvasWebHost.isDefaultScaffold()) {
+      this.canvasRehydratePending = false;
+      this.canvasRehydrateErrorText = null;
     }
     this.canvasA2uiHydrated = false;
     this.canvasPageLoading = true;
@@ -777,9 +1049,19 @@ export class NodeRuntime {
     const normalizedUrl = this.normalizeCanvasText(url);
     if (normalizedUrl !== null) {
       this.canvasWebHost.setCurrentUrl(normalizedUrl);
+    } else {
+      this.canvasWebHost.refreshCurrentUrlFromController();
+    }
+    if (!this.canvasWebHost.isDefaultScaffold()) {
+      this.canvasRehydratePending = false;
+      this.canvasRehydrateErrorText = null;
+      this.didAutoRequestCanvasRehydrate = false;
     }
     this.canvasPageLoading = false;
-    this.logCanvasInfo('onPageFinished url=%{public}s', normalizedUrl ?? this.canvasWebHost.getDisplayUrl());
+    this.logCanvasInfo(
+      'onPageFinished url=%{public}s',
+      this.canvasWebHost.getCurrentUrl() ?? this.canvasWebHost.getDisplayUrl(),
+    );
     this.notifyCanvasUi();
   }
 
@@ -787,6 +1069,12 @@ export class NodeRuntime {
     const normalizedUrl = this.normalizeCanvasText(url);
     if (normalizedUrl !== null) {
       this.canvasWebHost.setCurrentUrl(normalizedUrl);
+    }
+    this.canvasRehydratePending = false;
+    if (this.canvasWebHost.isDefaultScaffold()) {
+      this.didAutoRequestCanvasRehydrate = false;
+    } else {
+      this.canvasRehydrateErrorText = null;
     }
     this.canvasA2uiHydrated = false;
     this.canvasPageLoading = false;
@@ -802,7 +1090,12 @@ export class NodeRuntime {
   }
 
   reloadCanvasPage(): void {
+    if (this.canvasWebHost.isDefaultScaffold()) {
+      this.didAutoRequestCanvasRehydrate = false;
+    }
     this.canvasA2uiHydrated = false;
+    this.canvasRehydratePending = false;
+    this.canvasRehydrateErrorText = null;
     this.canvasPageLoading = true;
     this.canvasPageErrorText = null;
     this.canvasPageErrorDetail = null;
@@ -973,10 +1266,29 @@ export class NodeRuntime {
     void this.syncCanvasDebugOverlay();
   }
 
+  private updateStatus(): void {
+    this._isConnected = this.operatorConnected;
+    const operator = this.operatorStatusText.trim();
+    const node = this.nodeStatusText.trim();
+    this._statusText =
+      this.operatorConnected && this.nodeConnected ? "Connected" :
+        this.operatorConnected && !this.nodeConnected ? "Connected (node offline)" :
+          !this.operatorConnected && this.nodeConnected
+            ? (operator.length > 0 && operator !== "Offline"
+              ? `Connected (operator: ${operator})`
+              : "Connected (operator offline)")
+            : operator.length > 0 && operator !== "Offline"
+              ? operator
+              : node;
+    this.notifyStatus();
+  }
+
   private syncCanvasDebugOverlay(): void {
     void this.prefs.getBooleanOr("canvas.debug.enabled", false).then((en) => {
       if (en) {
-        const sub = this._remoteAddress.trim().length > 0 ? this._remoteAddress : null;
+        const server = this.normalizedSummaryText(this.gatewayServerName);
+        const remote = this._remoteAddress.trim().length > 0 ? this._remoteAddress : null;
+        const sub = server ?? remote;
         this.canvasWebHost.setDebugStatus(true, this._statusText, sub);
       } else {
         this.canvasWebHost.setDebugStatus(false, null, null);
@@ -1119,12 +1431,13 @@ export class NodeRuntime {
     this.resetNotificationForwardingBaseline();
   }
 
-  async getRecentNotificationPackages(): Promise<string[]> {
+  async getRecentNotificationApps(): Promise<NotificationForwardingCandidateApp[]> {
     const snapshot = await this.notificationStore.readSnapshot();
-    const recent: string[] = [];
+    const recent: NotificationForwardingCandidateApp[] = [];
     const seen = new Set<string>();
     for (let i = 0; i < snapshot.notifications.length; i++) {
-      const packageName = snapshot.notifications[i].packageName.trim();
+      const entry = snapshot.notifications[i];
+      const packageName = entry.packageName.trim();
       if (
         packageName.length === 0 ||
         packageName === NodeRuntime.NOTIFICATION_FORWARDING_DEFAULT_BLOCKED_PACKAGE ||
@@ -1133,12 +1446,26 @@ export class NodeRuntime {
         continue;
       }
       seen.add(packageName);
-      recent.push(packageName);
+      recent.push({
+        packageName,
+        label: this.normalizedSummaryText(entry.subText) ??
+          this.normalizedSummaryText(entry.title) ??
+          packageName,
+      });
       if (recent.length >= 12) {
         break;
       }
     }
     return recent;
+  }
+
+  async getRecentNotificationPackages(): Promise<string[]> {
+    const recentApps = await this.getRecentNotificationApps();
+    const packages: string[] = [];
+    for (let i = 0; i < recentApps.length; i++) {
+      packages.push(recentApps[i].packageName);
+    }
+    return packages;
   }
 
   async getNotificationForwardingQuietHoursEnabled(): Promise<boolean> {
@@ -1218,6 +1545,11 @@ export class NodeRuntime {
 
   async setVoiceMicEnabled(enabled: boolean): Promise<void> {
     await this.voiceCoordinator.setMicEnabled(enabled);
+    await this.syncVoiceWakeState();
+  }
+
+  async setTalkModeEnabled(enabled: boolean): Promise<void> {
+    await this.voiceCoordinator.setTalkModeEnabled(enabled);
     await this.syncVoiceWakeState();
   }
 
@@ -1364,8 +1696,11 @@ export class NodeRuntime {
     if (!storedFingerprint) {
       this.pendingGatewayTrust = null;
       this.notifyGatewayTrust();
-      this._statusText = "Verify gateway TLS fingerprint…";
-      this.notifyStatus();
+      this.operatorConnected = false;
+      this.nodeConnected = false;
+      this.operatorStatusText = "Verify gateway TLS fingerprint…";
+      this.nodeStatusText = "Offline";
+      this.updateStatus();
       const probe = await probeGatewayTlsCertificate(endpoint.host, endpoint.port);
       if (!probe) {
         throw new Error("Failed: can't read TLS fingerprint");
@@ -1402,8 +1737,11 @@ export class NodeRuntime {
         certPem: probe.pem,
       };
       this.notifyGatewayTrust();
-      this._statusText = "Gateway TLS fingerprint changed. Verify and trust again.";
-      this.notifyStatus();
+      this.operatorConnected = false;
+      this.nodeConnected = false;
+      this.operatorStatusText = "Gateway TLS fingerprint changed. Verify and trust again.";
+      this.nodeStatusText = "Offline";
+      this.updateStatus();
       return null;
     }
     return writeTrustedCertPem(this.context, stableId, probe.pem);
@@ -1418,9 +1756,11 @@ export class NodeRuntime {
     stableId: string | null = null,
   ): Promise<void> {
     this.disconnect();
-    this._statusText = "Connecting…";
-    this._isConnected = false;
-    this.notifyStatus();
+    this.operatorConnected = false;
+    this.nodeConnected = false;
+    this.operatorStatusText = "Connecting…";
+    this.nodeStatusText = "Connecting…";
+    this.updateStatus();
 
     const endpoint: GatewayEndpoint = { host: host.trim(), port, useTls };
     const endpointStableId = stableId?.trim() || this.buildGatewayStableId(endpoint.host, endpoint.port, endpoint.useTls);
@@ -1434,42 +1774,37 @@ export class NodeRuntime {
     const operatorOpts = await this.buildOperatorConnectOptions();
     const nodeOpts = await this.buildNodeConnectOptions();
 
-    let operatorConnected = false;
-    let nodeConnected = false;
-    let mainSessionKey: string | null = null;
     const remoteAddress =
       endpoint.host.includes(":") ? `[${endpoint.host}]:${endpoint.port}` : `${endpoint.host}:${endpoint.port}`;
 
     const operatorSession = new GatewaySession(
       this.identityStore,
       this.deviceAuthStore,
-      (_, _remote, sessionKey) => {
-        operatorConnected = true;
-        if (sessionKey) mainSessionKey = sessionKey;
-        if (operatorConnected && nodeConnected) {
-          this._statusText = "Connected";
-          this._isConnected = true;
-          this._remoteAddress = remoteAddress;
+      (serverName, _remote, sessionKey) => {
+        this.operatorConnected = true;
+        this.operatorStatusText = "Connected";
+        this.gatewayServerName = this.normalizedSummaryText(serverName);
+        this.gatewayMainSessionKey = this.normalizeMainSessionKey(sessionKey);
+        this.chatController?.applyMainSessionKey(this.resolveMainSessionKey());
+        this._remoteAddress = remoteAddress;
+        this.updateStatus();
+        if (this.operatorConnected && this.nodeConnected) {
           this.resetCanvasRehydrateState();
-          this.canvasWebHost.navigate("");
-          this.notifyStatus();
-          if (mainSessionKey) {
-            this.chatController?.applyMainSessionKey(mainSessionKey);
-          }
+          this.showLocalCanvasOnConnect();
+          this.chatController?.applyMainSessionKey(this.resolveMainSessionKey());
           this.chatController?.bootstrap();
-          void this.refreshVoiceWakeWordsFromGateway();
         }
+        void this.refreshVoiceWakeWordsFromGateway();
+        void this.refreshHomeCanvasOverviewIfConnected();
       },
       (message) => {
-        this._statusText = message;
-        this._isConnected = false;
-        this.resetCanvasRehydrateState();
-        this.canvasWebHost.navigate("");
-        this.notifyStatus();
+        this.operatorConnected = false;
+        this.operatorStatusText = message;
+        this.gatewayServerName = null;
+        this._remoteAddress = "";
+        this.chatController?.applyMainSessionKey(this.resolveMainSessionKey());
+        this.updateStatus();
         this.chatController?.onDisconnected(message);
-        const node = this.nodeSession;
-        this.nodeSession = null;
-        node?.disconnect();
       },
       (event, payloadJson) => {
         if (event === "voicewake.changed") {
@@ -1491,30 +1826,23 @@ export class NodeRuntime {
       this.identityStore,
       this.deviceAuthStore,
       () => {
-        nodeConnected = true;
-        if (operatorConnected && nodeConnected) {
-          this._statusText = "Connected";
-          this._isConnected = true;
-          this._remoteAddress = remoteAddress;
+        this.nodeConnected = true;
+        this.nodeStatusText = "Connected";
+        this.updateStatus();
+        this.showLocalCanvasOnConnect();
+        if (this.operatorConnected && this.nodeConnected) {
           this.resetCanvasRehydrateState();
-          this.canvasWebHost.navigate("");
-          this.notifyStatus();
-          if (mainSessionKey) {
-            this.chatController?.applyMainSessionKey(mainSessionKey);
-          }
+          this.chatController?.applyMainSessionKey(this.resolveMainSessionKey());
           this.chatController?.bootstrap();
+          void this.refreshHomeCanvasOverviewIfConnected();
         }
       },
       (message) => {
-        this._statusText = message;
-        this._isConnected = false;
+        this.nodeConnected = false;
+        this.nodeStatusText = message;
         this.resetCanvasRehydrateState();
-        this.canvasWebHost.navigate("");
-        this.notifyStatus();
-        this.chatController?.onDisconnected(message);
-        const op = this.operatorSession;
-        this.operatorSession = null;
-        op?.disconnect();
+        this.showLocalCanvasOnDisconnect();
+        this.updateStatus();
       },
       () => {},
       async (req) => {
@@ -1563,11 +1891,14 @@ export class NodeRuntime {
       await this.setManualEnabled(true);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this._statusText = msg.startsWith("Gateway ") ? msg : `Gateway error: ${msg}`;
-      this._isConnected = false;
+      this.operatorConnected = false;
+      this.nodeConnected = false;
+      this.operatorStatusText = msg.startsWith("Gateway ") ? msg : `Gateway error: ${msg}`;
+      this.nodeStatusText = "Offline";
+      this.clearHomeCanvasOverview();
       this.resetCanvasRehydrateState();
       this.canvasWebHost.navigate("");
-      this.notifyStatus();
+      this.updateStatus();
       const op = this.operatorSession;
       const node = this.nodeSession;
       this.operatorSession = null;
@@ -1594,8 +1925,11 @@ export class NodeRuntime {
   declineGatewayTrustPrompt(): void {
     this.pendingGatewayTrust = null;
     this.notifyGatewayTrust();
-    this._statusText = "Offline";
-    this.notifyStatus();
+    this.operatorConnected = false;
+    this.nodeConnected = false;
+    this.operatorStatusText = "Offline";
+    this.nodeStatusText = "Offline";
+    this.updateStatus();
   }
 
   private async buildClientInfo(mode: string): Promise<GatewayClientInfo> {
@@ -1610,6 +1944,8 @@ export class NodeRuntime {
     return {
       id: CLIENT_ID,
       version: VERSION,
+      // Gateway command policy currently recognizes the mobile app as the Android client id.
+      // Keep platform metadata Android-compatible until the gateway adds a Harmony-specific lane.
       platform: "android",
       mode,
       deviceFamily: "Android",
@@ -1700,7 +2036,7 @@ export class NodeRuntime {
       commands,
       permissions,
       client: await this.buildClientInfo("node"),
-      userAgent: `OpenClawAndroid/${VERSION} (Android 14; SDK 34)`,
+      userAgent: `OpenClawHarmonyOS/${VERSION} (HarmonyOS; ArkTS)`,
     };
   }
 
@@ -1712,7 +2048,7 @@ export class NodeRuntime {
       commands: [],
       permissions: {},
       client: await this.buildClientInfo("ui"),
-      userAgent: `OpenClawAndroid/${VERSION} (Android 14; SDK 34)`,
+      userAgent: `OpenClawHarmonyOS/${VERSION} (HarmonyOS; ArkTS)`,
     };
   }
 
@@ -1724,8 +2060,11 @@ export class NodeRuntime {
     const token = await this.getGatewayToken();
     const password = await this.getGatewayPassword();
     if (!host || host.trim().length === 0) {
-      this._statusText = "Failed: no cached gateway endpoint";
-      this.notifyStatus();
+      this.operatorConnected = false;
+      this.nodeConnected = false;
+      this.operatorStatusText = "Failed: no cached gateway endpoint";
+      this.nodeStatusText = "Offline";
+      this.updateStatus();
       return;
     }
     await this.connect(host.trim(), port, useTls, token, password);
@@ -1758,12 +2097,16 @@ export class NodeRuntime {
       this.nodeSession = null;
     }
     this.chatController = null;
-    this._statusText = "Offline";
-    this._isConnected = false;
+    this.operatorConnected = false;
+    this.nodeConnected = false;
+    this.operatorStatusText = "Offline";
+    this.nodeStatusText = "Offline";
     this._remoteAddress = "";
+    this.clearHomeCanvasOverview();
     this.resetCanvasRehydrateState();
+    this.updateHomeCanvasState();
     this.canvasWebHost.navigate("");
-    this.notifyStatus();
+    this.updateStatus();
   }
 
   async clearPairing(): Promise<void> {

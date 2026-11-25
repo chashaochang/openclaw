@@ -5,6 +5,8 @@ import { common } from '@kit.AbilityKit';
 import { webview } from '@kit.ArkWeb';
 import { NodeRuntime, type CanvasUiState } from '../NodeRuntime';
 
+let wholeWebPageDrawingEnabled = false;
+
 interface WebPageBeginPayload {
   url?: string;
 }
@@ -79,6 +81,9 @@ export struct ScreenTabScreen {
   @State canvasState: CanvasUiState = defaultCanvasUiState();
   private webCtl: webview.WebviewController = new webview.WebviewController();
   private previousConnected = false;
+  private previousVisible = true;
+  private previousA2uiHydrated = false;
+  private refreshedForCurrentConnection = false;
 
   private resStr(res: Resource): string {
     const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
@@ -103,6 +108,14 @@ export struct ScreenTabScreen {
       return;
     }
     void this.nodeRuntime.requestCanvasRehydrate(source, false);
+  }
+
+  private maybeRefreshHomeCanvasOverview(): void {
+    if (!this.visible || !this.isConnected || this.refreshedForCurrentConnection) {
+      return;
+    }
+    this.refreshedForCurrentConnection = true;
+    void this.nodeRuntime.refreshHomeCanvasOverviewIfConnected();
   }
 
   private hasPageIssue(): boolean {
@@ -253,25 +266,95 @@ export struct ScreenTabScreen {
     );
   }
 
+  private applyWebActivity(active: boolean): void {
+    try {
+      if (active) {
+        webview.WebviewController.resumeAllTimers();
+      } else {
+        webview.WebviewController.pauseAllTimers();
+      }
+    } catch {
+      // ignore unsupported timer controls on this platform
+    }
+    try {
+      if (active) {
+        this.webCtl.onActive();
+      } else {
+        this.webCtl.onInactive();
+      }
+    } catch {
+      // Controller may not be bound yet or may already be tearing down.
+    }
+  }
+
   aboutToAppear(): void {
+    if (!wholeWebPageDrawingEnabled) {
+      try {
+        webview.WebviewController.enableWholeWebPageDrawing();
+        wholeWebPageDrawingEnabled = true;
+      } catch {
+        // ignore unsupported platforms and keep JS snapshot fallback available.
+      }
+    }
     this.nodeRuntime.getCanvasWebHost().attach(this.webCtl);
+    this.previousConnected = this.isConnected;
+    this.previousVisible = this.visible;
+    this.previousA2uiHydrated = this.canvasState.a2uiHydrated;
+    this.refreshedForCurrentConnection = !this.isConnected;
+    this.applyWebActivity(this.visible);
     this.nodeRuntime.setCanvasUiListener((state: CanvasUiState) => {
       this.canvasState = state;
     });
-    void this.nodeRuntime.refreshHomeCanvasOverviewIfConnected();
+    this.nodeRuntime.syncCanvasCurrentUrlFromController();
+    this.maybeRefreshHomeCanvasOverview();
     this.maybeAutoRequestCanvasRehydrate('screen_tab_appear');
   }
 
   aboutToUpdate(): void {
     if (this.isConnected && !this.previousConnected) {
+      this.refreshedForCurrentConnection = false;
+      this.maybeRefreshHomeCanvasOverview();
       this.maybeAutoRequestCanvasRehydrate('screen_tab_connected');
+    } else if (!this.isConnected && this.previousConnected) {
+      this.refreshedForCurrentConnection = false;
     }
     this.previousConnected = this.isConnected;
+    if (
+      this.visible &&
+      this.isConnected &&
+      this.canvasState.isDefaultScaffold &&
+      !this.canvasState.a2uiHydrated &&
+      this.previousA2uiHydrated
+    ) {
+      this.maybeAutoRequestCanvasRehydrate('screen_tab_a2ui_reset');
+    }
+    this.previousA2uiHydrated = this.canvasState.a2uiHydrated;
+    if (this.visible !== this.previousVisible) {
+      this.applyWebActivity(this.visible);
+      if (this.visible) {
+        this.nodeRuntime.syncCanvasCurrentUrlFromController();
+        this.maybeRefreshHomeCanvasOverview();
+        this.maybeAutoRequestCanvasRehydrate('screen_tab_visible');
+      }
+      this.previousVisible = this.visible;
+    }
   }
 
   aboutToDisappear(): void {
+    this.applyWebActivity(false);
     this.nodeRuntime.setCanvasUiListener(null);
     this.nodeRuntime.getCanvasWebHost().detach(this.webCtl);
+  }
+
+  onPageShow(): void {
+    this.applyWebActivity(this.visible);
+    this.nodeRuntime.syncCanvasCurrentUrlFromController();
+    this.maybeRefreshHomeCanvasOverview();
+    this.maybeAutoRequestCanvasRehydrate('screen_tab_page_show');
+  }
+
+  onPageHide(): void {
+    this.applyWebActivity(false);
   }
 
   build() {

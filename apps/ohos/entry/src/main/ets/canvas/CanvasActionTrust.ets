@@ -2,12 +2,14 @@
  * Trust model for A2UI postMessage from Web (matches Android CanvasActionTrust).
  */
 import { url } from '@kit.ArkTS';
+import { CANVAS_SCAFFOLD_RESOURCE_URL } from './CanvasWebHost';
 
 interface ParsedTrustUrl {
   scheme: string;
   host: string;
   port: number;
   path: string;
+  query: string;
 }
 
 function parseHttpParts(raw: string): ParsedTrustUrl | null {
@@ -30,7 +32,8 @@ function parseHttpParts(raw: string): ParsedTrustUrl | null {
     if (path.length === 0) {
       path = '/';
     }
-    const out: ParsedTrustUrl = { scheme, host, port, path };
+    const query = u.search ?? '';
+    const out: ParsedTrustUrl = { scheme, host, port, path, query };
     return out;
   } catch {
     return null;
@@ -52,15 +55,12 @@ function isTrustedA2uiPage(candidateRaw: string, trustedUrl: string): boolean {
   if (candidate.port !== trusted.port) {
     return false;
   }
-  const trustedPath = trusted.path.length > 0 ? trusted.path : '/';
-  const candidatePath = candidate.path.length > 0 ? candidate.path : '/';
-  const trustedPrefix = trustedPath.endsWith('/') ? trustedPath : `${trustedPath}/`;
-  return candidatePath === trustedPath || candidatePath.startsWith(trustedPrefix);
+  return candidate.path === trusted.path && candidate.query === trusted.query;
 }
 
 export function isHarmonyScaffoldUrl(candidate: string): boolean {
-  const c = candidate.trim().toLowerCase();
-  return c.includes('canvasscaffold/scaffold.html') && c.startsWith('resource://');
+  const c = candidate.trim().replace(/[?#].*$/, '').toLowerCase();
+  return c === CANVAS_SCAFFOLD_RESOURCE_URL.toLowerCase();
 }
 
 export function isTrustedCanvasActionUrl(rawUrl: string | null | undefined, trustedA2uiUrls: string[]): boolean {

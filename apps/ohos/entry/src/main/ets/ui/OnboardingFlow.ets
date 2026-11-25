@@ -11,8 +11,11 @@ import { notificationExtensionSubscription, notificationManager } from '@kit.Not
 import {
   decodeGatewaySetupCode,
   parseGatewayEndpoint,
+  parseGatewayEndpointResult,
   resolveScannedSetupCode,
+  resolveScannedSetupCodeResult,
   composeGatewayManualUrl,
+  GatewayEndpointValidationError,
 } from '../common/GatewaySetupCode';
 import type { GatewayEndpointConfig } from '../common/GatewaySetupCode';
 import { NodeRuntime } from '../NodeRuntime';
@@ -143,12 +146,14 @@ export struct OnboardingFlow {
       });
       const raw = result?.originalValue?.trim();
       if (!raw) return;
-      const code = resolveScannedSetupCode(raw);
-      if (!code) {
-        this.gatewayError = this.resStr($r('app.string.onboarding_qr_error_invalid_setup_code')) || 'Invalid setup code';
+      const scanned = resolveScannedSetupCodeResult(raw);
+      if (!scanned.setupCode) {
+        this.gatewayError = scanned.error ?
+          this.gatewayEndpointValidationText(scanned.error, 'qr') :
+          (this.resStr($r('app.string.onboarding_qr_error_invalid_setup_code')) || 'Invalid setup code');
         return;
       }
-      this.setupCode = code;
+      this.setupCode = scanned.setupCode;
       this.gatewayInputMode = 'setupCode';
     } catch (_) {
       this.gatewayError = this.resStr($r('app.string.onboarding_scan_failed')) || 'Scan failed';
@@ -179,13 +184,15 @@ export struct OnboardingFlow {
           this.gatewayError = this.resStr($r('app.string.onboarding_error_scan_qr_first')) || 'Scan QR first, or use advanced setup.';
           return;
         }
-        const ep = parseGatewayEndpoint(decoded.url);
-        if (!ep) {
-          this.gatewayError = this.resStr($r('app.string.onboarding_error_setup_code_invalid_url')) || 'Gateway URL in setup code is invalid.';
+        const parsed = parseGatewayEndpointResult(decoded.url);
+        if (!parsed.config) {
+          this.gatewayError = parsed.error ?
+            this.gatewayEndpointValidationText(parsed.error, 'setupCode') :
+            (this.resStr($r('app.string.onboarding_error_setup_code_invalid_url')) || 'Gateway URL in setup code is invalid.');
           return;
         }
         this.gatewayUrl = decoded.url;
-        this.gatewayEndpoint = ep;
+        this.gatewayEndpoint = parsed.config;
         this.gatewayToken = decoded.token ?? '';
         this.gatewayPassword = decoded.password ?? '';
       } else {
@@ -194,13 +201,15 @@ export struct OnboardingFlow {
           this.manualPort,
           this.manualTls
         );
-        const ep = manualUrl ? parseGatewayEndpoint(manualUrl) : null;
-        if (!ep) {
-          this.gatewayError = this.resStr($r('app.string.onboarding_error_manual_invalid_endpoint')) || 'Manual endpoint is invalid.';
+        const parsed = manualUrl ? parseGatewayEndpointResult(manualUrl) : null;
+        if (!parsed || !parsed.config) {
+          this.gatewayError = parsed?.error ?
+            this.gatewayEndpointValidationText(parsed.error, 'manual') :
+            (this.resStr($r('app.string.onboarding_error_manual_invalid_endpoint')) || 'Manual endpoint is invalid.');
           return;
         }
-        this.gatewayUrl = ep.displayUrl;
-        this.gatewayEndpoint = ep;
+        this.gatewayUrl = parsed.config.displayUrl;
+        this.gatewayEndpoint = parsed.config;
       }
       this.gatewayError = '';
       this.step = 'permissions';
@@ -430,8 +439,7 @@ export struct OnboardingFlow {
   private resolvedEndpointFromSetupCode(): string {
     const decoded = decodeGatewaySetupCode(this.setupCode);
     if (!decoded) return '';
-    const ep = parseGatewayEndpoint(decoded.url);
-    return ep?.displayUrl ?? '';
+    return parseGatewayEndpointResult(decoded.url).config?.displayUrl ?? '';
   }
 
   private resolvedEndpointFromManual(): string {
@@ -440,8 +448,32 @@ export struct OnboardingFlow {
       this.manualPort,
       this.manualTls
     );
-    const ep = url ? parseGatewayEndpoint(url) : null;
-    return ep?.displayUrl ?? '';
+    return url ? parseGatewayEndpointResult(url).config?.displayUrl ?? '' : '';
+  }
+
+  private gatewayEndpointValidationText(
+    error: GatewayEndpointValidationError,
+    source: 'setupCode' | 'manual' | 'qr',
+  ): string {
+    if (error === GatewayEndpointValidationError.INSECURE_REMOTE_URL) {
+      if (source === 'setupCode') {
+        return this.resStr($r('app.string.connect_validation_setup_code_insecure_remote_url')) ||
+          'Setup code points to an insecure remote gateway. Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback.';
+      }
+      if (source === 'qr') {
+        return this.resStr($r('app.string.connect_validation_qr_insecure_remote_url')) ||
+          'QR code points to an insecure remote gateway. Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback.';
+      }
+      return this.resStr($r('app.string.connect_validation_insecure_remote_url')) ||
+        'Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback.';
+    }
+    if (source === 'setupCode') {
+      return this.resStr($r('app.string.onboarding_error_setup_code_invalid_url')) || 'Gateway URL in setup code is invalid.';
+    }
+    if (source === 'qr') {
+      return this.resStr($r('app.string.onboarding_qr_error_invalid_setup_code')) || 'Invalid setup code';
+    }
+    return this.resStr($r('app.string.onboarding_error_manual_invalid_endpoint')) || 'Manual endpoint is invalid.';
   }
 
   /** Mirrors Android `GatewayDiagnostics.gatewayStatusForDisplay`. */

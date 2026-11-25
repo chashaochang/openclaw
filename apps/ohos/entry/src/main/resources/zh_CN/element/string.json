@@ -49,6 +49,18 @@
       "value": "请粘贴有效的设置码以连接。"
     },
     {
+      "name": "connect_validation_insecure_remote_url",
+      "value": "Tailscale 和公网移动节点必须使用 wss:// 或 Tailscale Serve。ws:// 仅允许用于 localhost 和回环地址。"
+    },
+    {
+      "name": "connect_validation_setup_code_insecure_remote_url",
+      "value": "设置码指向了不安全的远程网关。Tailscale 和公网移动节点必须使用 wss:// 或 Tailscale Serve。ws:// 仅允许用于 localhost 和回环地址。"
+    },
+    {
+      "name": "connect_validation_qr_insecure_remote_url",
+      "value": "二维码指向了不安全的远程网关。Tailscale 和公网移动节点必须使用 wss:// 或 Tailscale Serve。ws:// 仅允许用于 localhost 和回环地址。"
+    },
+    {
       "name": "connect_manual",
       "value": "手动"
     },
@@ -539,6 +551,142 @@
     {
       "name": "settings_permission_notification_listener_sub",
       "value": "读取第三方通知用于自动化。"
+    },
+    {
+      "name": "settings_notification_forwarding_title",
+      "value": "通知转发"
+    },
+    {
+      "name": "settings_notification_forwarding_sub",
+      "value": "在应用保持连接期间，把通知变化事件转发进网关。"
+    },
+    {
+      "name": "settings_notification_forwarding_disabled_hint",
+      "value": "请先开启通知监听权限，之后才能转发通知事件。"
+    },
+    {
+      "name": "settings_notification_forwarding_filter_label",
+      "value": "包过滤模式"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_allowlist",
+      "value": "白名单"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_allowlist_sub",
+      "value": "只转发列表中的 bundle ID。"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_allowlist_empty_summary",
+      "value": "当前未选择任何项，白名单模式下不会转发任何 bundle ID。"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_blocklist",
+      "value": "黑名单"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_blocklist_sub",
+      "value": "除列表中的 bundle ID 外，其余都会转发。"
+    },
+    {
+      "name": "settings_notification_forwarding_mode_blocklist_empty_summary",
+      "value": "当前未选择任何项，黑名单模式下会转发除 OpenClaw 外的所有 bundle ID。"
+    },
+    {
+      "name": "settings_notification_forwarding_picker_label",
+      "value": "Bundle 选择器"
+    },
+    {
+      "name": "settings_notification_forwarding_picker_sub",
+      "value": "搜索最近出现或已经配置过的 bundle ID，点击即可添加或移除。"
+    },
+    {
+      "name": "settings_notification_forwarding_picker_placeholder",
+      "value": "搜索 bundle ID"
+    },
+    {
+      "name": "settings_notification_forwarding_picker_empty",
+      "value": "还没有可选 bundle。等收到通知后，这里就会出现候选项。"
+    },
+    {
+      "name": "settings_notification_forwarding_picker_no_match",
+      "value": "没有匹配这个搜索的 bundle ID。"
+    },
+    {
+      "name": "settings_notification_forwarding_picker_selected",
+      "value": "已选择"
+    },
+    {
+      "name": "settings_notification_forwarding_packages_label",
+      "value": "Bundle ID 列表"
+    },
+    {
+      "name": "settings_notification_forwarding_packages_sub",
+      "value": "可手动输入逗号分隔的 bundle ID，或从下面的候选列表里选择。"
+    },
+    {
+      "name": "settings_notification_forwarding_packages_placeholder",
+      "value": "com.example.mail, com.example.chat"
+    },
+    {
+      "name": "settings_notification_forwarding_packages_empty",
+      "value": "还没有配置任何 bundle ID。"
+    },
+    {
+      "name": "settings_notification_forwarding_recent_label",
+      "value": "最近通知应用"
+    },
+    {
+      "name": "settings_notification_forwarding_recent_empty",
+      "value": "收到通知后，最近的通知 bundle ID 会显示在这里。"
+    },
+    {
+      "name": "settings_notification_forwarding_recent_add",
+      "value": "添加"
+    },
+    {
+      "name": "settings_notification_forwarding_recent_remove",
+      "value": "移除"
+    },
+    {
+      "name": "settings_notification_forwarding_session_label",
+      "value": "会话键"
+    },
+    {
+      "name": "settings_notification_forwarding_session_sub",
+      "value": "通知默认发往的会话，留空则使用 main。"
+    },
+    {
+      "name": "settings_notification_forwarding_rate_label",
+      "value": "速率限制"
+    },
+    {
+      "name": "settings_notification_forwarding_rate_sub",
+      "value": "每分钟最多转发多少条通知事件。"
+    },
+    {
+      "name": "settings_notification_forwarding_rate_invalid",
+      "value": "请输入大于 0 的每分钟事件数。"
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_title",
+      "value": "静默时段"
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_sub",
+      "value": "在指定时间段内暂停通知转发。"
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_start",
+      "value": "开始时间"
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_end",
+      "value": "结束时间"
+    },
+    {
+      "name": "settings_notification_forwarding_quiet_invalid",
+      "value": "请输入有效的 24 小时制时间，例如 22:00。"
     },
     {
       "name": "settings_permission_photos",

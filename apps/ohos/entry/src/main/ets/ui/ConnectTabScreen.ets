@@ -8,8 +8,11 @@ import type { GatewayTrustPrompt } from '../NodeRuntime';
 import {
   decodeGatewaySetupCode,
   parseGatewayEndpoint,
+  parseGatewayEndpointResult,
   resolveScannedSetupCode,
+  resolveScannedSetupCodeResult,
   composeGatewayManualUrl,
+  GatewayEndpointValidationError,
 } from '../common/GatewaySetupCode';
 import { GatewayDiscovery, type GatewayEndpointInfo } from '../gateway/GatewayDiscovery';
 import { normalizeFingerprintForDisplay } from '../gateway/GatewayTls';
@@ -62,15 +65,35 @@ export struct ConnectTabScreen {
   private setupResolvedEndpoint(): string {
     const decoded = decodeGatewaySetupCode(this.setupCodeInput.trim());
     if (!decoded) return '';
-    const ep = parseGatewayEndpoint(decoded.url);
-    return ep?.displayUrl ?? '';
+    return parseGatewayEndpointResult(decoded.url).config?.displayUrl ?? '';
   }
 
   private manualResolvedEndpoint(): string {
     const url = composeGatewayManualUrl(this.hostInput, this.portInput, this.useTls);
     if (!url) return '';
-    const ep = parseGatewayEndpoint(url);
-    return ep?.displayUrl ?? '';
+    return parseGatewayEndpointResult(url).config?.displayUrl ?? '';
+  }
+
+  private endpointValidationText(error: GatewayEndpointValidationError, source: 'setupCode' | 'manual' | 'qr'): string {
+    if (error === GatewayEndpointValidationError.INSECURE_REMOTE_URL) {
+      if (source === 'setupCode') {
+        return this.resStr($r('app.string.connect_validation_setup_code_insecure_remote_url')) ||
+          'Setup code points to an insecure remote gateway. Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback.';
+      }
+      if (source === 'qr') {
+        return this.resStr($r('app.string.connect_validation_qr_insecure_remote_url')) ||
+          'QR code points to an insecure remote gateway. Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback.';
+      }
+      return this.resStr($r('app.string.connect_validation_insecure_remote_url')) ||
+        'Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback.';
+    }
+    if (source === 'setupCode') {
+      return this.resStr($r('app.string.connect_invalid_gateway_url_in_setup')) || 'Invalid gateway URL in setup code';
+    }
+    if (source === 'qr') {
+      return this.resStr($r('app.string.connect_qr_error_invalid')) || 'Invalid setup code';
+    }
+    return this.resStr($r('app.string.connect_validation_manual_host_port')) || 'Enter a valid manual host and port to connect.';
   }
 
   private activeEndpoint(): string {
@@ -170,32 +193,32 @@ export struct ConnectTabScreen {
         this.validationText = invalidMsg;
         return;
       }
-      const setupCode = resolveScannedSetupCode(raw);
-      if (!setupCode) {
-        this.validationText = invalidMsg;
+      const scanned = resolveScannedSetupCodeResult(raw);
+      if (!scanned.setupCode) {
+        this.validationText = scanned.error ? this.endpointValidationText(scanned.error, 'qr') : invalidMsg;
         return;
       }
-      const decoded = decodeGatewaySetupCode(setupCode);
+      const decoded = decodeGatewaySetupCode(scanned.setupCode);
       if (!decoded) {
         this.validationText = invalidMsg;
         return;
       }
-      const endpoint = parseGatewayEndpoint(decoded.url);
-      if (!endpoint) {
-        this.validationText = invalidMsg;
+      const parsed = parseGatewayEndpointResult(decoded.url);
+      if (!parsed.config) {
+        this.validationText = parsed.error ? this.endpointValidationText(parsed.error, 'qr') : invalidMsg;
         return;
       }
-      this.setupCodeInput = setupCode;
-      this.hostInput = endpoint.host;
-      this.portInput = String(endpoint.port);
-      this.useTls = endpoint.tls;
+      this.setupCodeInput = scanned.setupCode;
+      this.hostInput = parsed.config.host;
+      this.portInput = String(parsed.config.port);
+      this.useTls = parsed.config.tls;
       this.selectedStableId = '';
       this.tokenInput = decoded.token ?? '';
       this.passwordInput = decoded.password ?? '';
       await this.nodeRuntime.saveManualConfig(
-        endpoint.host,
-        endpoint.port,
-        endpoint.tls,
+        parsed.config.host,
+        parsed.config.port,
+        parsed.config.tls,
         decoded.token ?? '',
         decoded.password ?? ''
       );
@@ -222,22 +245,24 @@ export struct ConnectTabScreen {
           this.validationText = this.resStr($r('app.string.connect_validation_setup_code')) || 'Paste a valid setup code to connect.';
           return;
         }
-        const endpoint = parseGatewayEndpoint(decoded.url);
-        if (!endpoint) {
-          this.validationText = this.resStr($r('app.string.connect_invalid_gateway_url_in_setup')) || 'Invalid gateway URL in setup code';
+        const parsed = parseGatewayEndpointResult(decoded.url);
+        if (!parsed.config) {
+          this.validationText = parsed.error ?
+            this.endpointValidationText(parsed.error, 'setupCode') :
+            (this.resStr($r('app.string.connect_invalid_gateway_url_in_setup')) || 'Invalid gateway URL in setup code');
           return;
         }
         await this.nodeRuntime.saveManualConfig(
-          endpoint.host,
-          endpoint.port,
-          endpoint.tls,
+          parsed.config.host,
+          parsed.config.port,
+          parsed.config.tls,
           decoded.token ?? '',
           decoded.password ?? ''
         );
         await this.nodeRuntime.connect(
-          endpoint.host,
-          endpoint.port,
-          endpoint.tls,
+          parsed.config.host,
+          parsed.config.port,
+          parsed.config.tls,
           decoded.token ?? '',
           decoded.password ?? '',
           null
@@ -249,17 +274,25 @@ export struct ConnectTabScreen {
           this.validationText = this.resStr($r('app.string.connect_validation_manual_host_port')) || 'Enter a valid manual host and port to connect.';
           return;
         }
+        const manualUrl = composeGatewayManualUrl(host, String(port), this.useTls);
+        const parsed = manualUrl ? parseGatewayEndpointResult(manualUrl) : null;
+        if (!parsed || !parsed.config) {
+          this.validationText = parsed?.error ?
+            this.endpointValidationText(parsed.error, 'manual') :
+            (this.resStr($r('app.string.connect_validation_manual_host_port')) || 'Enter a valid manual host and port to connect.');
+          return;
+        }
         await this.nodeRuntime.saveManualConfig(
-          host,
-          port,
-          this.useTls,
+          parsed.config.host,
+          parsed.config.port,
+          parsed.config.tls,
           this.tokenInput.trim(),
           this.passwordInput.trim()
         );
         await this.nodeRuntime.connect(
-          host,
-          port,
-          this.useTls,
+          parsed.config.host,
+          parsed.config.port,
+          parsed.config.tls,
           this.tokenInput.trim(),
           this.passwordInput.trim(),
           this.selectedStableId.trim().length > 0 ? this.selectedStableId.trim() : null
@@ -394,8 +427,13 @@ export struct ConnectTabScreen {
             .height(52)
             .fontSize(16)
             .fontWeight(FontWeight.Bold)
-            .backgroundColor(this.isConnected ? '#dc3545' : '#1D5DD8')
+            .backgroundColor(this.isConnected ? '#FFFFFF' : '#1D5DD8')
+            .fontColor(this.isConnected ? '#dc3545' : '#FFFFFF')
             .borderRadius(14)
+            .border({
+              width: 1,
+              color: this.isConnected ? 'rgba(220, 53, 69, 0.40)' : '#1D5DD8',
+            })
             .enabled(!this.connecting)
             .onClick(() => {
               if (this.isConnected) {

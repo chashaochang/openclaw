@@ -12,6 +12,7 @@ function defaultVoiceUiState(): VoiceUiState {
     micCooldown: false,
     isSpeaking: false,
     speakerEnabled: true,
+    talkModeEnabled: false,
     canCancel: false,
     liveTranscript: '',
     queuedMessages: [],

@@ -43,6 +43,7 @@ export class HarmonySpeechRecognizer {
   private audioBytesSent = 0;
   private readDataCallback: ((buffer: ArrayBuffer) => void) | null = null;
   private sessionStarted = false;
+  private shuttingDownSession = false;
 
   private clearRestartTimer(): void {
     if (this.restartTimer >= 0) {
@@ -78,6 +79,7 @@ export class HarmonySpeechRecognizer {
       this.engine = await this.createEngineWithModeFallback();
       hilog.info(LOG_DOMAIN, LOG_TAG, 'engine created');
       this.attachListener();
+      this.shuttingDownSession = false;
       await this.beginListeningSession();
       return true;
     } catch (err) {
@@ -325,6 +327,18 @@ export class HarmonySpeechRecognizer {
           hilog.info(LOG_DOMAIN, LOG_TAG, 'onError ignored because acceptResults=false sid=%{public}s', sessionId);
           return;
         }
+        if (sessionId === this.currentSessionId && (!this.continueListening || this.shuttingDownSession)) {
+          hilog.info(
+            LOG_DOMAIN,
+            LOG_TAG,
+            'onError ignored during shutdown sid=%{public}s continueListening=%{public}s shuttingDown=%{public}s',
+            sessionId,
+            String(this.continueListening),
+            String(this.shuttingDownSession),
+          );
+          this.sessionStarted = false;
+          return;
+        }
         const detail = `${errorMessage} (${errorCode})`;
         hilog.error(LOG_DOMAIN, LOG_TAG, 'onError sid=%{public}s detail=%{public}s', sessionId, detail);
         if (sessionId === this.currentSessionId) {
@@ -360,6 +374,7 @@ export class HarmonySpeechRecognizer {
     this.sessionSeq += 1;
     this.currentSessionId = `openclaw-asr-${Date.now()}-${this.sessionSeq}`;
     this.sessionStarted = false;
+    this.shuttingDownSession = false;
     const audioInfo: speechRecognizer.AudioInfo = {
       audioType: 'pcm',
       sampleRate: 16000,
@@ -396,6 +411,7 @@ export class HarmonySpeechRecognizer {
     if (!eng || sid.length === 0) {
       return;
     }
+    this.shuttingDownSession = true;
     try {
       await this.stopAudioCapturer(false);
       hilog.info(LOG_DOMAIN, LOG_TAG, 'finish sid=%{public}s', sid);
@@ -417,6 +433,7 @@ export class HarmonySpeechRecognizer {
     this.engine = null;
     this.currentSessionId = '';
     this.sessionStarted = false;
+    this.shuttingDownSession = false;
     if (!eng) {
       return;
     }
@@ -445,6 +462,7 @@ export class HarmonySpeechRecognizer {
     this.engine = null;
     this.currentSessionId = '';
     this.sessionStarted = false;
+    this.shuttingDownSession = false;
     if (eng) {
       try {
         hilog.info(LOG_DOMAIN, LOG_TAG, 'shutdown engine');

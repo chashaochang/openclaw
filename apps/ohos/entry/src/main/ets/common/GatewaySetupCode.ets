@@ -11,6 +11,16 @@ export interface GatewayEndpointConfig {
   displayUrl: string;
 }
 
+export enum GatewayEndpointValidationError {
+  INVALID_URL = 'INVALID_URL',
+  INSECURE_REMOTE_URL = 'INSECURE_REMOTE_URL',
+}
+
+export interface GatewayEndpointParseResult {
+  config: GatewayEndpointConfig | null;
+  error: GatewayEndpointValidationError | null;
+}
+
 export interface GatewaySetupCode {
   url: string;
   token: string | null;
@@ -25,6 +35,11 @@ interface SetupCodeJson {
 
 interface WrappedSetupCodeJson {
   setupCode?: string;
+}
+
+export interface GatewayScannedSetupCodeResult {
+  setupCode: string | null;
+  error: GatewayEndpointValidationError | null;
 }
 
 function padBase64(input: string): string {
@@ -62,22 +77,85 @@ export function decodeGatewaySetupCode(rawInput: string): GatewaySetupCode | nul
 }
 
 export function parseGatewayEndpoint(rawInput: string): GatewayEndpointConfig | null {
+  return parseGatewayEndpointResult(rawInput).config;
+}
+
+function parseIpv4Segments(host: string): number[] | null {
+  const parts = host.split('.');
+  if (parts.length !== 4) {
+    return null;
+  }
+  const out: number[] = [];
+  for (const part of parts) {
+    const value = parseInt(part, 10);
+    if (isNaN(value) || value < 0 || value > 255) {
+      return null;
+    }
+    out.push(value);
+  }
+  return out;
+}
+
+export function isLoopbackGatewayHost(host: string): boolean {
+  let normalized = host.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (normalized.endsWith('.')) {
+    normalized = normalized.slice(0, -1);
+  }
+  if (normalized.length === 0) {
+    return false;
+  }
+  const zoneIndex = normalized.indexOf('%');
+  if (zoneIndex >= 0) {
+    return false;
+  }
+  if (normalized === 'localhost' || normalized === '::1') {
+    return true;
+  }
+  const ipv4 = parseIpv4Segments(normalized);
+  if (ipv4) {
+    return ipv4[0] === 127;
+  }
+  if (normalized.startsWith('::ffff:')) {
+    const mappedIpv4 = parseIpv4Segments(normalized.slice('::ffff:'.length));
+    return mappedIpv4 !== null && mappedIpv4[0] === 127;
+  }
+  return false;
+}
+
+export function parseGatewayEndpointResult(rawInput: string): GatewayEndpointParseResult {
   const raw = rawInput.trim();
-  if (raw.length === 0) return null;
+  if (raw.length === 0) {
+    return { config: null, error: GatewayEndpointValidationError.INVALID_URL };
+  }
   const normalized = raw.includes('://') ? raw : 'https://' + raw;
   try {
     const urlObj = url.URL.parseURL(normalized);
     const host = (urlObj.hostname ?? '').trim();
-    if (host.length === 0) return null;
+    if (host.length === 0) {
+      return { config: null, error: GatewayEndpointValidationError.INVALID_URL };
+    }
     const scheme = (urlObj.protocol ?? '').replace(':', '').toLowerCase();
-    const tls = scheme === 'wss' || scheme === 'https';
-    const port = urlObj.port ? parseInt(urlObj.port, 10) : 18789;
-    const portNum = (port >= 1 && port <= 65535) ? port : 18789;
-    const displayUrl = (tls ? 'https' : 'http') + '://' + host + ':' + portNum;
+    let tls = true;
+    if (scheme === 'ws' || scheme === 'http') {
+      tls = false;
+    } else if (scheme === 'wss' || scheme === 'https' || scheme.length === 0) {
+      tls = true;
+    }
+    if (!tls && !isLoopbackGatewayHost(host)) {
+      return { config: null, error: GatewayEndpointValidationError.INSECURE_REMOTE_URL };
+    }
+    const defaultPort = tls ? 443 : 18789;
+    const displayDefaultPort = tls ? 443 : 80;
+    const port = urlObj.port ? parseInt(urlObj.port, 10) : defaultPort;
+    const portNum = (port >= 1 && port <= 65535) ? port : defaultPort;
+    const displayHost = host.includes(':') ? `[${host}]` : host;
+    const displayUrl = portNum === displayDefaultPort && defaultPort === displayDefaultPort
+      ? `${tls ? 'https' : 'http'}://${displayHost}`
+      : `${tls ? 'https' : 'http'}://${displayHost}:${portNum}`;
     const cfg: GatewayEndpointConfig = { host, port: portNum, tls, displayUrl };
-    return cfg;
+    return { config: cfg, error: null };
   } catch {
-    return null;
+    return { config: null, error: GatewayEndpointValidationError.INVALID_URL };
   }
 }
 
@@ -96,9 +174,23 @@ export function resolveSetupCodeCandidate(rawInput: string): string | null {
 }
 
 export function resolveScannedSetupCode(rawInput: string): string | null {
+  return resolveScannedSetupCodeResult(rawInput).setupCode;
+}
+
+export function resolveScannedSetupCodeResult(rawInput: string): GatewayScannedSetupCodeResult {
   const candidate = resolveSetupCodeCandidate(rawInput);
-  if (!candidate) return null;
-  return decodeGatewaySetupCode(candidate) ? candidate : null;
+  if (!candidate) {
+    return { setupCode: null, error: GatewayEndpointValidationError.INVALID_URL };
+  }
+  const decoded = decodeGatewaySetupCode(candidate);
+  if (!decoded) {
+    return { setupCode: null, error: GatewayEndpointValidationError.INVALID_URL };
+  }
+  const parsed = parseGatewayEndpointResult(decoded.url);
+  if (parsed.config === null) {
+    return { setupCode: null, error: parsed.error };
+  }
+  return { setupCode: candidate, error: null };
 }
 
 export function composeGatewayManualUrl(host: string, port: string, tls: boolean): string | null {

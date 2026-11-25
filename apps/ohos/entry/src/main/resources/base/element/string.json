@@ -49,6 +49,18 @@
       "value": "Paste a valid setup code to connect."
     },
     {
+      "name": "connect_validation_insecure_remote_url",
+      "value": "Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback."
+    },
+    {
+      "name": "connect_validation_setup_code_insecure_remote_url",
+      "value": "Setup code points to an insecure remote gateway. Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback."
+    },
+    {
+      "name": "connect_validation_qr_insecure_remote_url",
+      "value": "QR code points to an insecure remote gateway. Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and loopback."
+    },
+    {
       "name": "connect_manual",
       "value": "Manual"
     },
@@ -769,12 +781,44 @@
       "value": "Only listed bundle IDs are forwarded."
     },
     {
+      "name": "settings_notification_forwarding_mode_allowlist_empty_summary",
+      "value": "Selected: none - allowlist mode forwards nothing until you add bundle IDs."
+    },
+    {
       "name": "settings_notification_forwarding_mode_blocklist",
       "value": "Blocklist"
     },
     {
       "name": "settings_notification_forwarding_mode_blocklist_sub",
       "value": "Everything except listed bundle IDs is forwarded."
+    },
+    {
+      "name": "settings_notification_forwarding_mode_blocklist_empty_summary",
+      "value": "Selected: none - blocklist mode forwards all bundle IDs except OpenClaw."
+    },
+    {
+      "name": "settings_notification_forwarding_picker_label",
+      "value": "Bundle picker"
+    },
+    {
+      "name": "settings_notification_forwarding_picker_sub",
+      "value": "Search recent or already configured bundle IDs, then tap to add or remove them."
+    },
+    {
+      "name": "settings_notification_forwarding_picker_placeholder",
+      "value": "Search bundle ID"
+    },
+    {
+      "name": "settings_notification_forwarding_picker_empty",
+      "value": "No bundle candidates yet. Once notifications arrive, they will show up here."
+    },
+    {
+      "name": "settings_notification_forwarding_picker_no_match",
+      "value": "No bundle IDs match that search."
+    },
+    {
+      "name": "settings_notification_forwarding_picker_selected",
+      "value": "Selected"
     },
     {
       "name": "settings_notification_forwarding_packages_label",

@@ -24,6 +24,7 @@ function defaultVoiceUiState(): VoiceUiState {
     micCooldown: false,
     isSpeaking: false,
     speakerEnabled: true,
+    talkModeEnabled: false,
     canCancel: false,
     liveTranscript: '',
     queuedMessages: [],
@@ -285,6 +286,9 @@ export struct ChatTabScreen {
     if (this.voiceState.micEnabled) {
       void this.nodeRuntime.setVoiceMicEnabled(false);
     }
+    if (this.voiceState.talkModeEnabled) {
+      void this.nodeRuntime.setTalkModeEnabled(false);
+    }
     this.nodeRuntime.setVoiceUiListener(null);
     this.nodeRuntime.setVoiceScreenActive(false);
     this.closeImagePreview();
@@ -412,6 +416,7 @@ export struct ChatTabScreen {
 
   private voicePanelVisible(): boolean {
     return this.voicePanelExpanded ||
+      this.voiceState.talkModeEnabled ||
       this.voiceState.micEnabled ||
       this.voiceState.micCooldown ||
       this.voiceState.isSpeaking ||
@@ -421,6 +426,9 @@ export struct ChatTabScreen {
   }
 
   private voiceStatusChipBackground(): string {
+    if (this.voiceState.talkModeEnabled) {
+      return '#E8F5E9';
+    }
     if (this.voiceState.micEnabled) {
       return '#E8F5E9';
     }
@@ -437,6 +445,9 @@ export struct ChatTabScreen {
   }
 
   private voiceStatusChipBorder(): string {
+    if (this.voiceState.talkModeEnabled) {
+      return 'rgba(47, 140, 90, 0.28)';
+    }
     if (this.voiceState.micEnabled) {
       return 'rgba(47, 140, 90, 0.28)';
     }
@@ -453,6 +464,9 @@ export struct ChatTabScreen {
   }
 
   private voiceStatusChipTextColor(): string {
+    if (this.voiceState.talkModeEnabled) {
+      return '#2F8C5A';
+    }
     if (this.voiceState.micEnabled) {
       return '#2F8C5A';
     }
@@ -532,6 +546,9 @@ export struct ChatTabScreen {
     if (this.voiceState.isSending) {
       return 'Sending your voice turn…';
     }
+    if (this.voiceState.talkModeEnabled) {
+      return 'Talk mode stays ready for the next turn.';
+    }
     const detail = this.voiceState.statusDetail.trim();
     if (detail.length > 0 && detail !== 'Mic off') {
       return detail;
@@ -551,6 +568,45 @@ export struct ChatTabScreen {
   private async cancelVoiceSend(): Promise<void> {
     this.voicePanelExpanded = false;
     await this.nodeRuntime.cancelVoicePendingTurn();
+  }
+
+  private async requestMicAndEnableTalkMode(): Promise<void> {
+    const ctx = AppStorage.get<common.UIAbilityContext>('abilityContext');
+    if (!ctx) {
+      return;
+    }
+    const at = abilityAccessCtrl.createAtManager();
+    const mic: Permissions = 'ohos.permission.MICROPHONE';
+    try {
+      const result = await at.requestPermissionsFromUser(ctx, [mic]);
+      const granted =
+        result.authResults.length > 0 &&
+        result.authResults.every((r) => r === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED);
+      this.hasMicPermission = granted;
+      if (granted) {
+        this.refreshMicPermission();
+        this.nodeRuntime.setVoiceScreenActive(true);
+        await this.nodeRuntime.setTalkModeEnabled(true);
+      }
+    } catch {
+      this.hasMicPermission = false;
+    }
+  }
+
+  private async toggleTalkMode(): Promise<void> {
+    this.plusMenuVisible = false;
+    this.voicePanelExpanded = true;
+    this.refreshMicPermission();
+    this.nodeRuntime.setVoiceScreenActive(true);
+    if (this.voiceState.talkModeEnabled) {
+      await this.nodeRuntime.setTalkModeEnabled(false);
+      return;
+    }
+    if (this.hasMicPermission) {
+      await this.nodeRuntime.setTalkModeEnabled(true);
+      return;
+    }
+    await this.requestMicAndEnableTalkMode();
   }
 
   private async toggleVoiceMic(): Promise<void> {
@@ -690,6 +746,19 @@ export struct ChatTabScreen {
         .onClick(() => {
           void this.nodeRuntime.setVoiceSpeakerEnabled(!this.voiceState.speakerEnabled);
         })
+
+        Button(this.voiceState.talkModeEnabled ? 'Talk on' : 'Talk')
+          .height(34)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .backgroundColor(this.voiceState.talkModeEnabled ? '#E8F5E9' : '#F6F7FA')
+          .fontColor(this.voiceState.talkModeEnabled ? '#2F8C5A' : '#4D5563')
+          .borderRadius(17)
+          .border({ width: 1, color: this.voiceState.talkModeEnabled ? '#CDE8D2' : '#E5E7EC' })
+          .padding({ left: 12, right: 12 })
+          .onClick(() => {
+            void this.toggleTalkMode();
+          })
 
         if (!this.voiceState.micEnabled && !this.voiceState.isSending && !this.voiceState.micCooldown) {
           Button() {

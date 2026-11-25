@@ -18,10 +18,18 @@ interface TalkConfigState {
   interruptOnSpeech: boolean;
 }
 
+interface CachedRunCompletion {
+  state: 'final' | 'error' | 'aborted';
+  assistantText: string | null;
+  errorText: string | null;
+}
+
 const MAX_CONVERSATION = 40;
+const MAX_CACHED_RUN_COMPLETIONS = 128;
 const DRAIN_MS = 1400;
 const DEFAULT_SILENCE_TIMEOUT_MS = 700;
 const PENDING_RUN_TIMEOUT_MS = 45000;
+const TRANSIENT_STATUS_MS = 2800;
 const LOG_DOMAIN = 0x0000;
 const LOG_TAG = 'VoiceFlow';
 
@@ -173,6 +181,7 @@ export class VoiceCoordinator {
   private isSending = false;
   private pendingRunId: string | null = null;
   private pendingAssistantEntryId: string | null = null;
+  private completedRuns = new Map<string, CachedRunCompletion>();
   private voiceScreenActive = false;
   private drainTimer: number = -1;
   private silenceTimer: number = -1;
@@ -184,6 +193,8 @@ export class VoiceCoordinator {
   private replyPlaybackStartedAtMs = 0;
   private pendingInterruptedPlaybackNote: string | null = null;
   private silenceTimeoutMs = DEFAULT_SILENCE_TIMEOUT_MS;
+  private transientStatusDetail: string | null = null;
+  private transientStatusTimer: number = -1;
   /** Persisted across assistant turns when directives set voice/model without once: true (Android TalkMode parity). */
   private currentVoiceId: string | null = null;
   private currentModelId: string | null = null;
@@ -269,6 +280,33 @@ export class VoiceCoordinator {
     }
   }
 
+  private clearTransientStatusTimer(clearDetail: boolean = true): void {
+    if (this.transientStatusTimer >= 0) {
+      clearTimeout(this.transientStatusTimer);
+      this.transientStatusTimer = -1;
+    }
+    if (clearDetail) {
+      this.transientStatusDetail = null;
+    }
+  }
+
+  private showTransientStatus(detail: string, durationMs: number = TRANSIENT_STATUS_MS): void {
+    const trimmed = detail.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+    this.clearTransientStatusTimer(false);
+    this.transientStatusDetail = trimmed;
+    this.transientStatusTimer = setTimeout(() => {
+      this.transientStatusTimer = -1;
+      this.transientStatusDetail = null;
+      this.refreshStatusDetail();
+      this.notifyUi();
+    }, durationMs) as number;
+    this.refreshStatusDetail();
+    this.notifyUi();
+  }
+
   private scheduleResumeListening(delayMs: number = 280): void {
     this.clearResumeListeningTimer();
     if (!this.talkModeEnabled || !this.voiceScreenActive || !this.getGatewayConnected()) {
@@ -314,6 +352,7 @@ export class VoiceCoordinator {
     this.clearSilenceTimer();
     this.clearPendingRunTimer();
     this.clearResumeListeningTimer();
+    this.clearTransientStatusTimer();
 
     const idsToRemove: string[] = [];
     if (this.activeUserEntryId !== null) {
@@ -340,6 +379,7 @@ export class VoiceCoordinator {
     this.activeUserEntryId = null;
     this.pendingRunId = null;
     this.pendingAssistantEntryId = null;
+    this.completedRuns.clear();
     this.isSending = false;
     this.activeSpeakReply = false;
     this.replyPlaybackActive = false;
@@ -399,6 +439,12 @@ export class VoiceCoordinator {
     if (!active) {
       this.talkModeEnabled = false;
       this.clearResumeListeningTimer();
+      this.completedRuns.clear();
+      if (this.micEnabled || this.micCooldown) {
+        this.micEnabled = false;
+        this.micCooldown = false;
+        void this.asr.stop();
+      }
       this.playbackToken += 1;
       this.isSpeaking = false;
       this.replyPlaybackActive = false;
@@ -430,59 +476,38 @@ export class VoiceCoordinator {
     } catch {
       return;
     }
-    const runId = String(payload['runId'] ?? '').trim();
-    const pending = this.pendingRunId;
-    if (!pending || runId.length === 0 || runId !== pending) {
+    const chat = this.getChat();
+    const eventSessionKey = String(payload['sessionKey'] ?? '').trim();
+    if (chat && eventSessionKey.length > 0 && eventSessionKey !== chat.getSessionKey()) {
       return;
     }
+    const runId = String(payload['runId'] ?? '').trim();
     const state = String(payload['state'] ?? '');
     if (state === 'delta') {
+      const pending = this.pendingRunId;
+      if (!pending || runId.length === 0 || runId !== pending) {
+        return;
+      }
       const deltaText = parseAssistantChatText(payload);
       if (deltaText && deltaText.trim().length > 0) {
         this.upsertPendingAssistant(deltaText.trim(), true);
       }
       return;
     }
-    if (state === 'final') {
-      const finalText = parseAssistantChatText(payload)?.trim() ?? '';
-      const shouldResume = this.talkModeEnabled;
-      const allowBackgroundSpeak = this.activeSpeakReply;
-      if (finalText.length > 0) {
-        this.upsertPendingAssistant(finalText, false);
-        void this.playAssistantReply(finalText, allowBackgroundSpeak).finally(() => {
-          if (shouldResume) {
-            this.scheduleResumeListening();
-          }
-        });
-      }
-      this.completePendingTurn();
-      if (finalText.length === 0) {
-        if (this.pendingAssistantEntryId !== null) {
-          this.updateConversationEntry(this.pendingAssistantEntryId, null, false);
-        }
-        if (shouldResume) {
-          this.scheduleResumeListening();
-        }
-      }
+    if (runId.length === 0) {
       return;
     }
-    if (state === 'error') {
-      const err = String(payload['errorMessage'] ?? 'Voice request failed').trim() || 'Voice request failed';
-      const shouldResume = this.talkModeEnabled;
-      this.upsertPendingAssistant(err, false);
-      this.completePendingTurn();
-      if (shouldResume) {
-        this.scheduleResumeListening(900);
-      }
+    const completion = this.buildCachedRunCompletion(state, payload);
+    if (completion === null) {
       return;
     }
-    if (state === 'aborted') {
-      const shouldResume = this.talkModeEnabled;
-      this.upsertPendingAssistant('Response aborted', false);
-      this.completePendingTurn();
-      if (shouldResume) {
-        this.scheduleResumeListening(420);
-      }
+    this.cacheRunCompletion(runId, completion);
+    if (this.pendingRunId !== runId) {
+      return;
+    }
+    const ready = this.consumeRunCompletion(runId);
+    if (ready !== null) {
+      this.applyTerminalRunCompletion(runId, ready);
     }
   }
 
@@ -584,7 +609,6 @@ export class VoiceCoordinator {
     hilog.info(LOG_DOMAIN, LOG_TAG, 'setMicEnabled enabled=%{public}s', String(enabled));
     this.micEnabled = enabled;
     if (enabled) {
-      this.talkModeEnabled = true;
       this.micCooldown = false;
       this.clearSilenceTimer();
       this.clearResumeListeningTimer();
@@ -607,14 +631,12 @@ export class VoiceCoordinator {
         },
         (err) => {
           hilog.error(LOG_DOMAIN, LOG_TAG, 'asr error %{public}s', err);
-          this.statusDetail = err.trim().length > 0 ? err.trim() : 'Speech recognition failed';
-          this.notifyUi();
+          this.showTransientStatus(err.trim().length > 0 ? err.trim() : 'Speech recognition failed');
         },
       );
       if (!started) {
         hilog.error(LOG_DOMAIN, LOG_TAG, 'asr start returned false');
         this.micEnabled = false;
-        this.talkModeEnabled = false;
         this.refreshStatusDetail();
         this.notifyUi();
         return;
@@ -658,6 +680,66 @@ export class VoiceCoordinator {
     this.notifyUi();
   }
 
+  async setTalkModeEnabled(enabled: boolean): Promise<void> {
+    if (enabled === this.talkModeEnabled) {
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'setTalkModeEnabled no-op enabled=%{public}s', String(enabled));
+      return;
+    }
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'setTalkModeEnabled enabled=%{public}s', String(enabled));
+    this.talkModeEnabled = enabled;
+    if (!enabled) {
+      const shouldStopRecognizer = this.micEnabled || this.micCooldown;
+      const idsToRemove: string[] = [];
+      if (this.activeUserEntryId !== null) {
+        idsToRemove.push(this.activeUserEntryId);
+      }
+      for (let i = 0; i < this.queuedConversationEntryIds.length; i++) {
+        idsToRemove.push(this.queuedConversationEntryIds[i]);
+      }
+      if (this.pendingAssistantEntryId !== null) {
+        idsToRemove.push(this.pendingAssistantEntryId);
+      }
+      this.clearResumeListeningTimer();
+      this.clearSilenceTimer();
+      this.clearTransientStatusTimer();
+      if (this.drainTimer >= 0) {
+        clearTimeout(this.drainTimer);
+        this.drainTimer = -1;
+      }
+      this.playbackToken += 1;
+      this.micEnabled = false;
+      this.micCooldown = false;
+      this.isSpeaking = false;
+      this.liveTranscript = '';
+      this.sessionSegments = [];
+      this.lastFinalSegment = null;
+      this.messageQueue = [];
+      this.queuedConversationEntryIds = [];
+      this.queuedSpeakReplies = [];
+      this.activeUserEntryId = null;
+      this.pendingRunId = null;
+      this.pendingAssistantEntryId = null;
+      this.completedRuns.clear();
+      this.isSending = false;
+      this.activeSpeakReply = false;
+      this.replyPlaybackActive = false;
+      this.replyPlaybackStartedAtMs = 0;
+      this.pendingInterruptedPlaybackNote = null;
+      if (shouldStopRecognizer) {
+        await this.asr.stop();
+      }
+      await this.tts.stop();
+      this.removeConversationEntries(idsToRemove);
+      this.refreshStatusDetail();
+      this.notifyUi();
+      return;
+    }
+    void this.reloadTalkConfig();
+    this.refreshStatusDetail();
+    this.notifyUi();
+    this.scheduleResumeListening(0);
+  }
+
   getMicEnabled(): boolean {
     return this.micEnabled;
   }
@@ -667,7 +749,7 @@ export class VoiceCoordinator {
   }
 
   isBusyForVoiceWake(): boolean {
-    return this.canCancel() || this.replyPlaybackActive;
+    return this.talkModeEnabled || this.canCancel() || this.replyPlaybackActive;
   }
 
   async speakWakeCommand(command: string): Promise<void> {
@@ -837,6 +919,7 @@ export class VoiceCoordinator {
     const outboundMessage = buildTalkModePrompt(next, this.pendingInterruptedPlaybackNote);
     this.pendingInterruptedPlaybackNote = null;
     const runKey = randomId();
+    this.consumeRunCompletion(runKey);
     this.activeUserEntryId = this.queuedConversationEntryIds.length > 0 ? this.queuedConversationEntryIds.shift() ?? null : null;
     this.activeSpeakReply = this.queuedSpeakReplies.length > 0 ? this.queuedSpeakReplies.shift() === true : false;
     this.isSending = true;
@@ -854,6 +937,10 @@ export class VoiceCoordinator {
         runKey,
       );
       if (!canonicalRunId || canonicalRunId.trim().length === 0) {
+        if (this.pendingRunId !== runKey) {
+          return;
+        }
+        const shouldResume = this.talkModeEnabled;
         this.clearPendingRunTimer();
         if (this.messageQueue.length > 0 && this.messageQueue[0] === next) {
           this.messageQueue.shift();
@@ -863,17 +950,32 @@ export class VoiceCoordinator {
         this.pendingAssistantEntryId = null;
         this.activeUserEntryId = null;
         this.activeSpeakReply = false;
+        this.showTransientStatus('Voice request did not return a run id');
         this.refreshStatusDetail();
         this.notifyUi();
+        if (shouldResume) {
+          this.scheduleResumeListening(900);
+        }
         this.sendQueuedIfIdle();
         return;
       }
       // Gateway chat.* events use runId from chat.send response, not always the idempotency key.
+      if (this.pendingRunId !== runKey) {
+        return;
+      }
       if (canonicalRunId !== runKey) {
         this.pendingRunId = canonicalRunId;
         this.armPendingRunTimeout(canonicalRunId);
+        const cached = this.consumeRunCompletion(canonicalRunId);
+        if (cached !== null) {
+          this.applyTerminalRunCompletion(canonicalRunId, cached);
+        }
       }
     }).catch((err: Error) => {
+      if (this.pendingRunId !== runKey) {
+        return;
+      }
+      const shouldResume = this.talkModeEnabled;
       hilog.error(LOG_DOMAIN, LOG_TAG, 'chat.send rejected: %{public}s', err.message);
       this.clearPendingRunTimer();
       if (this.messageQueue.length > 0 && this.messageQueue[0] === next) {
@@ -884,9 +986,13 @@ export class VoiceCoordinator {
       this.pendingAssistantEntryId = null;
       this.activeUserEntryId = null;
       this.activeSpeakReply = false;
-      this.statusDetail = `Send failed: ${err.message}`;
+      this.showTransientStatus(`Send failed: ${err.message}`);
       this.refreshStatusDetail();
       this.notifyUi();
+      if (shouldResume) {
+        this.scheduleResumeListening(900);
+      }
+      this.sendQueuedIfIdle();
     });
   }
 
@@ -897,12 +1003,17 @@ export class VoiceCoordinator {
       if (this.pendingRunId !== runId) {
         return;
       }
+      const shouldResume = this.talkModeEnabled;
       this.pendingRunId = null;
       this.pendingAssistantEntryId = null;
       this.isSending = false;
       this.activeSpeakReply = false;
+      this.showTransientStatus('Voice request timed out');
       this.refreshStatusDetail();
       this.notifyUi();
+      if (shouldResume) {
+        this.scheduleResumeListening(900);
+      }
       this.sendQueuedIfIdle();
     }, PENDING_RUN_TIMEOUT_MS) as number;
   }
@@ -924,9 +1035,96 @@ export class VoiceCoordinator {
     this.activeUserEntryId = null;
     this.isSending = false;
     this.activeSpeakReply = false;
+    if (!this.talkModeEnabled) {
+      this.liveTranscript = '';
+      this.sessionSegments = [];
+      this.lastFinalSegment = null;
+    }
     this.sendQueuedIfIdle();
     this.refreshStatusDetail();
     this.notifyUi();
+  }
+
+  private buildCachedRunCompletion(state: string, payload: JsonRec): CachedRunCompletion | null {
+    if (state === 'final') {
+      return {
+        state: 'final',
+        assistantText: parseAssistantChatText(payload)?.trim() ?? null,
+        errorText: null,
+      };
+    }
+    if (state === 'error') {
+      const err = String(payload['errorMessage'] ?? 'Voice request failed').trim() || 'Voice request failed';
+      return {
+        state: 'error',
+        assistantText: null,
+        errorText: err,
+      };
+    }
+    if (state === 'aborted') {
+      return {
+        state: 'aborted',
+        assistantText: null,
+        errorText: 'Response aborted',
+      };
+    }
+    return null;
+  }
+
+  private cacheRunCompletion(runId: string, completion: CachedRunCompletion): void {
+    this.completedRuns.set(runId, completion);
+    while (this.completedRuns.size > MAX_CACHED_RUN_COMPLETIONS) {
+      const first = this.completedRuns.keys().next();
+      if (first.done) {
+        break;
+      }
+      this.completedRuns.delete(first.value);
+    }
+  }
+
+  private consumeRunCompletion(runId: string): CachedRunCompletion | null {
+    const completion = this.completedRuns.get(runId) ?? null;
+    if (completion !== null) {
+      this.completedRuns.delete(runId);
+    }
+    return completion;
+  }
+
+  private applyTerminalRunCompletion(runId: string, completion: CachedRunCompletion): void {
+    if (this.pendingRunId !== runId) {
+      return;
+    }
+    if (completion.state === 'final') {
+      const finalText = completion.assistantText?.trim() ?? '';
+      const shouldResume = this.talkModeEnabled;
+      const allowBackgroundSpeak = this.activeSpeakReply;
+      if (finalText.length > 0) {
+        this.upsertPendingAssistant(finalText, false);
+        void this.playAssistantReply(finalText, allowBackgroundSpeak).finally(() => {
+          if (shouldResume) {
+            this.scheduleResumeListening();
+          }
+        });
+      }
+      this.completePendingTurn();
+      if (finalText.length === 0) {
+        if (this.pendingAssistantEntryId !== null) {
+          this.updateConversationEntry(this.pendingAssistantEntryId, null, false);
+        }
+        if (shouldResume) {
+          this.scheduleResumeListening();
+        }
+      }
+      return;
+    }
+    const shouldResume = this.talkModeEnabled;
+    const errText = completion.errorText ?? (completion.state === 'aborted' ? 'Response aborted' : 'Voice request failed');
+    this.upsertPendingAssistant(errText, false);
+    this.completePendingTurn();
+    this.showTransientStatus(errText);
+    if (shouldResume) {
+      this.scheduleResumeListening(completion.state === 'error' ? 900 : 420);
+    }
   }
 
   private queuedWaitingLabel(): string {
@@ -935,6 +1133,11 @@ export class VoiceCoordinator {
   }
 
   private refreshStatusDetail(): void {
+    const transient = this.transientStatusDetail?.trim() ?? '';
+    if (transient.length > 0) {
+      this.statusDetail = transient;
+      return;
+    }
     if (this.replyPlaybackActive || this.isSpeaking) {
       this.statusDetail = this.interruptOnSpeech ? 'Speaking · tap mic to interrupt' : 'Speaking';
       return;
@@ -991,7 +1194,7 @@ export class VoiceCoordinator {
       return 'Listening';
     }
     if (this.talkModeEnabled) {
-      return 'Talk mode';
+      return 'Talk on';
     }
     return 'Mic off';
   }
@@ -1006,7 +1209,6 @@ export class VoiceCoordinator {
       this.micCooldown ||
       this.isSending ||
       this.replyPlaybackActive ||
-      this.talkModeEnabled ||
       this.liveTranscript.trim().length > 0 ||
       this.sessionSegments.length > 0 ||
       this.messageQueue.length > 0 ||
@@ -1021,6 +1223,7 @@ export class VoiceCoordinator {
       micCooldown: this.micCooldown,
       isSpeaking: this.replyPlaybackActive || this.isSpeaking,
       speakerEnabled: this.speakerEnabled,
+      talkModeEnabled: this.talkModeEnabled,
       canCancel: this.canCancel(),
       liveTranscript: this.liveTranscript,
       queuedMessages: q,

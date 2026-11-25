@@ -232,6 +232,10 @@ export class ChatController {
     return this._thinkingLevel;
   }
 
+  getSessionKey(): string {
+    return this._sessionKey;
+  }
+
   setSessionKey(key: string): void {
     const k = (key ?? '').trim() || 'main';
     if (k === this._sessionKey) return;

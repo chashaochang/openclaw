@@ -8,7 +8,7 @@ import {
   normalizeLocalHourMinute,
   NotificationPackageFilterMode,
 } from '../common/NotificationForwardingPolicy';
-import { NodeRuntime } from '../NodeRuntime';
+import { NodeRuntime, type NotificationForwardingCandidateApp } from '../NodeRuntime';
 import { MotionHandler } from '../node/MotionHandler';
 import { LocationMode } from '../LocationMode';
 import { VoiceWakeMode } from '../voice/VoiceWakeMode';
@@ -17,6 +17,11 @@ interface StatusChipColorSet {
   bg: string;
   border: string;
   text: string;
+}
+
+interface NotificationPickerAppOption {
+  packageName: string;
+  label: string;
 }
 
 @Component
@@ -58,7 +63,8 @@ export struct SettingsTabScreen {
   @State notificationForwardingQuietEnd: string = '07:00';
   @State notificationForwardingRateDraft: string = '30';
   @State notificationForwardingSessionKeyDraft: string = '';
-  @State recentNotificationPackages: string[] = [];
+  @State recentNotificationApps: NotificationForwardingCandidateApp[] = [];
+  @State notificationPackageSearchDraft: string = '';
   @State refreshBusy: boolean = false;
   private readonly motionAvailable: boolean = MotionHandler.isAvailable();
 
@@ -223,7 +229,7 @@ export struct SettingsTabScreen {
       String(await this.nodeRuntime.getNotificationForwardingMaxEventsPerMinute());
     this.notificationForwardingSessionKeyDraft =
       await this.nodeRuntime.getNotificationForwardingSessionKey();
-    this.recentNotificationPackages = await this.nodeRuntime.getRecentNotificationPackages();
+    this.recentNotificationApps = await this.nodeRuntime.getRecentNotificationApps();
     this.refreshMicPermission();
     this.refreshCameraPermission();
     this.refreshLocationPermission();
@@ -480,8 +486,78 @@ export struct SettingsTabScreen {
     return this.parseNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft).length;
   }
 
+  private notificationForwardingConfiguredPackages(): string[] {
+    return this.parseNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+  }
+
+  private notificationForwardingCandidateApps(): NotificationPickerAppOption[] {
+    const configured = this.notificationForwardingConfiguredPackages();
+    const seen = new Set<string>();
+    const recentLabels = new Map<string, string>();
+    for (let i = 0; i < this.recentNotificationApps.length; i++) {
+      const app = this.recentNotificationApps[i];
+      const packageName = app.packageName.trim();
+      const label = app.label.trim();
+      if (packageName.length === 0 || recentLabels.has(packageName)) {
+        continue;
+      }
+      recentLabels.set(packageName, label.length > 0 ? label : packageName);
+    }
+    const out: NotificationPickerAppOption[] = [];
+    for (let i = 0; i < configured.length; i++) {
+      const value = configured[i].trim();
+      if (value.length === 0 || seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      out.push({
+        packageName: value,
+        label: recentLabels.get(value) ?? value,
+      });
+    }
+    for (let i = 0; i < this.recentNotificationApps.length; i++) {
+      const app = this.recentNotificationApps[i];
+      const packageName = app.packageName.trim();
+      if (packageName.length === 0 || seen.has(packageName)) {
+        continue;
+      }
+      seen.add(packageName);
+      out.push({
+        packageName,
+        label: app.label.trim().length > 0 ? app.label.trim() : packageName,
+      });
+    }
+    out.sort((left, right) => {
+      const labelCmp = left.label.localeCompare(right.label);
+      if (labelCmp !== 0) {
+        return labelCmp;
+      }
+      return left.packageName.localeCompare(right.packageName);
+    });
+    return out;
+  }
+
+  private filteredNotificationForwardingCandidateApps(): NotificationPickerAppOption[] {
+    const query = this.notificationPackageSearchDraft.trim().toLowerCase();
+    const candidates = this.notificationForwardingCandidateApps();
+    if (query.length === 0) {
+      return candidates;
+    }
+    const out: NotificationPickerAppOption[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const app = candidates[i];
+      if (
+        app.label.toLowerCase().includes(query) ||
+        app.packageName.toLowerCase().includes(query)
+      ) {
+        out.push(app);
+      }
+    }
+    return out;
+  }
+
   private isNotificationForwardingPackageConfigured(packageName: string): boolean {
-    const packages = this.parseNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+    const packages = this.notificationForwardingConfiguredPackages();
     for (let i = 0; i < packages.length; i++) {
       if (packages[i] === packageName) {
         return true;
@@ -501,22 +577,46 @@ export struct SettingsTabScreen {
     await this.nodeRuntime.setNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
   }
 
-  private async toggleRecentNotificationPackage(packageName: string): Promise<void> {
-    const packages = this.parseNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+  private async toggleNotificationForwardingPackage(packageName: string): Promise<void> {
+    const normalized = packageName.trim();
+    if (normalized.length === 0) {
+      return;
+    }
+    const packages = this.notificationForwardingConfiguredPackages();
     const next: string[] = [];
     let removed = false;
     for (let i = 0; i < packages.length; i++) {
-      if (packages[i] === packageName) {
+      if (packages[i] === normalized) {
         removed = true;
         continue;
       }
       next.push(packages[i]);
     }
     if (!removed) {
-      next.push(packageName);
+      next.push(normalized);
     }
     this.notificationForwardingPackagesCsvDraft = next.join(', ');
     await this.nodeRuntime.setNotificationForwardingPackagesCsv(this.notificationForwardingPackagesCsvDraft);
+  }
+
+  private notificationCandidateDisplayLabel(app: NotificationPickerAppOption): string {
+    const label = app.label.trim();
+    return label.length > 0 ? label : app.packageName.trim();
+  }
+
+  private notificationCandidateShowsPackage(app: NotificationPickerAppOption): boolean {
+    return this.notificationCandidateDisplayLabel(app) !== app.packageName.trim();
+  }
+
+  private notificationForwardingSelectionSummary(): string {
+    const count = this.notificationForwardingPackagesCount();
+    if (count > 0) {
+      return `${count} selected`;
+    }
+    if (this.notificationForwardingMode === NotificationPackageFilterMode.Allowlist) {
+      return this.resStr($r('app.string.settings_notification_forwarding_mode_allowlist_empty_summary'));
+    }
+    return this.resStr($r('app.string.settings_notification_forwarding_mode_blocklist_empty_summary'));
   }
 
   private async saveNotificationForwardingRate(): Promise<void> {
@@ -772,30 +872,45 @@ export struct SettingsTabScreen {
   }
 
   @Builder
-  RecentNotificationPackageRow(packageName: string) {
+  NotificationPackageCandidateRow(app: NotificationPickerAppOption) {
     Row({ space: 10 }) {
-      Text(packageName)
-        .fontSize(13)
-        .fontColor('#17181C')
-        .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Column({ space: 4 }) {
+        Text(this.notificationCandidateDisplayLabel(app))
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#17181C')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.notificationCandidateShowsPackage(app)) {
+          Text(app.packageName)
+            .fontSize(11)
+            .fontColor('#8A92A2')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        if (this.isNotificationForwardingPackageConfigured(app.packageName)) {
+          Text(this.resStr($r('app.string.settings_notification_forwarding_picker_selected')))
+            .fontSize(11)
+            .fontColor('#2F8C5A')
+        }
+      }
+      .layoutWeight(1)
       Button(
-        this.isNotificationForwardingPackageConfigured(packageName) ?
+        this.isNotificationForwardingPackageConfigured(app.packageName) ?
           this.resStr($r('app.string.settings_notification_forwarding_recent_remove')) :
           this.resStr($r('app.string.settings_notification_forwarding_recent_add')),
       )
-        .height(32)
-        .padding({ left: 12, right: 12 })
-        .backgroundColor(
-          this.isNotificationForwardingPackageConfigured(packageName) ? '#FFF4E5' : '#EEF1F6',
-        )
-        .fontColor('#17181C')
-        .borderRadius(10)
-        .enabled(this.notificationForwardingControlsEnabled())
-        .onClick(() => {
-          void this.toggleRecentNotificationPackage(packageName);
-        })
+      .height(32)
+      .padding({ left: 12, right: 12 })
+      .backgroundColor(
+        this.isNotificationForwardingPackageConfigured(app.packageName) ? '#FFF4E5' : '#EEF1F6',
+      )
+      .fontColor('#17181C')
+      .borderRadius(10)
+      .enabled(this.notificationForwardingControlsEnabled())
+      .onClick(() => {
+        void this.toggleNotificationForwardingPackage(app.packageName);
+      })
     }
     .width('100%')
   }
@@ -1397,6 +1512,51 @@ export struct SettingsTabScreen {
             .width('100%')
             .alignItems(HorizontalAlign.Start)
 
+            Text(this.notificationForwardingSelectionSummary())
+              .fontSize(12)
+              .fontColor('#8A92A2')
+              .width('100%')
+
+            Column({ space: 6 }) {
+              Text($r('app.string.settings_notification_forwarding_picker_label'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#4D5563')
+              Text($r('app.string.settings_notification_forwarding_picker_sub'))
+                .fontSize(12)
+                .fontColor('#8A92A2')
+              TextInput({
+                placeholder: this.resStr($r('app.string.settings_notification_forwarding_picker_placeholder')),
+                text: this.notificationPackageSearchDraft,
+              })
+                .enabled(this.notificationForwardingControlsEnabled())
+                .onChange((value: string) => {
+                  this.notificationPackageSearchDraft = value;
+                })
+                .width('100%')
+                .backgroundColor('#F7F8FA')
+                .borderRadius(12)
+                .border({ width: 1, color: '#E5E7EC' })
+              if (this.filteredNotificationForwardingCandidateApps().length === 0) {
+                Text(
+                  this.notificationForwardingCandidateApps().length === 0 ?
+                    this.resStr($r('app.string.settings_notification_forwarding_picker_empty')) :
+                    this.resStr($r('app.string.settings_notification_forwarding_picker_no_match')),
+                )
+                  .fontSize(12)
+                  .fontColor('#8A92A2')
+              } else {
+                Column({ space: 8 }) {
+                  ForEach(this.filteredNotificationForwardingCandidateApps(), (app: NotificationPickerAppOption) => {
+                    this.NotificationPackageCandidateRow(app)
+                  })
+                }
+                .width('100%')
+              }
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+
             Column({ space: 6 }) {
               Text($r('app.string.settings_notification_forwarding_packages_label'))
                 .fontSize(12)
@@ -1433,24 +1593,6 @@ export struct SettingsTabScreen {
                 .onClick(() => {
                   void this.saveNotificationForwardingPackagesCsv();
                 })
-            }
-            .width('100%')
-            .alignItems(HorizontalAlign.Start)
-
-            Column({ space: 8 }) {
-              Text($r('app.string.settings_notification_forwarding_recent_label'))
-                .fontSize(12)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#4D5563')
-              if (this.recentNotificationPackages.length === 0) {
-                Text($r('app.string.settings_notification_forwarding_recent_empty'))
-                  .fontSize(12)
-                  .fontColor('#8A92A2')
-              } else {
-                ForEach(this.recentNotificationPackages, (packageName: string) => {
-                  this.RecentNotificationPackageRow(packageName)
-                })
-              }
             }
             .width('100%')
             .alignItems(HorizontalAlign.Start)

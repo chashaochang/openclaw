@@ -39,7 +39,7 @@ function sleep(ms: number): Promise<void> {
 
 function buildSnapshotJs(format: 'png' | 'jpeg', quality: number | null, maxWidth: number | null): string {
   const mime = format === 'png' ? 'image/png' : 'image/jpeg';
-  const qualityJs = quality === null ? 'undefined' : String(quality);
+  const qualityJs = quality === null ? (format === 'png' ? 'undefined' : '0.82') : String(quality);
   const maxWidthJs = maxWidth === null ? 'null' : String(maxWidth);
   return `(() => {
     try {
@@ -108,6 +108,7 @@ export interface CanvasInvokeDeps {
   getNodeCanvasHost: () => string | null;
   getOperatorCanvasHost: () => string | null;
   refreshNodeCanvasCapability: () => Promise<boolean>;
+  onNavigate: () => void;
   onA2uiPush: () => void;
   onA2uiReset: () => void;
 }
@@ -211,6 +212,7 @@ export class CanvasInvokeHandler {
     if (command === OpenClawCanvasCommand.Present) {
       const url = parseCanvasNavigateUrl(paramsJson);
       canvas.navigate(url);
+      this.deps.onNavigate();
       return invokeOk(null);
     }
     if (command === OpenClawCanvasCommand.Hide) {
@@ -219,6 +221,7 @@ export class CanvasInvokeHandler {
     if (command === OpenClawCanvasCommand.Navigate) {
       const url = parseCanvasNavigateUrl(paramsJson);
       canvas.navigate(url);
+      this.deps.onNavigate();
       return invokeOk(null);
     }
     if (command === OpenClawCanvasCommand.Eval) {
@@ -234,25 +237,38 @@ export class CanvasInvokeHandler {
     if (command === OpenClawCanvasCommand.Snapshot) {
       const snapshot = parseSnapshotParams(paramsJson);
       return this.withCanvasAvailable(async () => {
-        const js = buildSnapshotJs(snapshot.format, snapshot.quality, snapshot.maxWidth);
-        const raw = await canvas.runJavaScript(js);
-        const obj = parseJsResultObject(raw);
-        if (!obj) {
-          return invokeErr('SNAPSHOT_UNAVAILABLE', 'SNAPSHOT_UNAVAILABLE: invalid snapshot result');
+        try {
+          const base64 = await canvas.snapshotBase64(
+            snapshot.format,
+            snapshot.quality,
+            snapshot.maxWidth,
+          );
+          const payload: SnapshotPayload = {
+            format: snapshot.format,
+            base64,
+          };
+          return invokeOk(JSON.stringify(payload));
+        } catch {
+          const js = buildSnapshotJs(snapshot.format, snapshot.quality, snapshot.maxWidth);
+          const raw = await canvas.runJavaScript(js);
+          const obj = parseJsResultObject(raw);
+          if (!obj) {
+            return invokeErr('SNAPSHOT_UNAVAILABLE', 'SNAPSHOT_UNAVAILABLE: invalid snapshot result');
+          }
+          if (obj['ok'] !== true) {
+            const err = String(obj['error'] ?? 'SNAPSHOT_UNAVAILABLE');
+            return invokeErr('SNAPSHOT_UNAVAILABLE', err);
+          }
+          const base64 = String(obj['base64'] ?? '').trim();
+          if (base64.length === 0) {
+            return invokeErr('SNAPSHOT_UNAVAILABLE', 'SNAPSHOT_UNAVAILABLE: empty snapshot');
+          }
+          const payload: SnapshotPayload = {
+            format: String(obj['format'] ?? snapshot.format),
+            base64: base64,
+          };
+          return invokeOk(JSON.stringify(payload));
         }
-        if (obj['ok'] !== true) {
-          const err = String(obj['error'] ?? 'SNAPSHOT_UNAVAILABLE');
-          return invokeErr('SNAPSHOT_UNAVAILABLE', err);
-        }
-        const base64 = String(obj['base64'] ?? '').trim();
-        if (base64.length === 0) {
-          return invokeErr('SNAPSHOT_UNAVAILABLE', 'SNAPSHOT_UNAVAILABLE: empty snapshot');
-        }
-        const payload: SnapshotPayload = {
-          format: String(obj['format'] ?? snapshot.format),
-          base64: base64,
-        };
-        return invokeOk(JSON.stringify(payload));
       });
     }
 
